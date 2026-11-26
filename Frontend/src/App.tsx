@@ -15,9 +15,13 @@ import { fromLonLat } from "ol/proj.js";
 import type OlMap from "ol/Map.js";
 import OSM from "ol/source/OSM.js";
 import TileLayer from "ol/layer/Tile.js";
-import MapView, { CRETE_CENTER, type MapStatus } from "@/components/MapView";
+import MapView, { type MapStatus } from "@/components/MapView";
+import { DrawnElementsList } from "@/components/DrawnElementsList";
+import { DrawingToolbar } from "@/components/DrawingToolbar";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { useDrawingTools } from "@/hooks/useDrawingTools";
+import { CRETE_CENTER } from "@/lib/map-config";
 
 type ThemeMode = "light" | "dark";
 
@@ -32,6 +36,7 @@ function initialTheme(): ThemeMode {
 export default function App() {
   const mapRef = useRef<OlMap | null>(null);
   const baseLayerRef = useRef<TileLayer<OSM> | null>(null);
+  const drawingTools = useDrawingTools();
   const [theme, setTheme] = useState<ThemeMode>(initialTheme);
   const [panelOpen, setPanelOpen] = useState(
     () => !window.matchMedia("(max-width: 720px)").matches,
@@ -42,9 +47,14 @@ export default function App() {
     loading: true,
     error: false,
   });
+  const [mapCenter, setMapCenter] = useState<[number, number]>([...CRETE_CENTER]);
 
   const handleMapStatus = useCallback((status: MapStatus) => {
     setMapStatus(status);
+  }, []);
+
+  const handleMapCenterChange = useCallback((center: [number, number]) => {
+    setMapCenter(center);
   }, []);
 
   const changeTheme = () => {
@@ -76,6 +86,14 @@ export default function App() {
       duration: 240,
     });
   };
+
+  const focusElement = (id: string) => {
+    drawingTools.selectElement(id);
+    drawingTools.centerElement(id);
+  };
+
+  const formatCoordinate = (value: number, positive: string, negative: string) =>
+    `${Math.abs(value).toFixed(2)}° ${value < 0 ? negative : positive}`;
 
   return (
     <div className="app-shell" data-theme={theme}>
@@ -167,6 +185,12 @@ export default function App() {
             </div>
           </section>
 
+          <DrawnElementsList
+            elements={drawingTools.elements}
+            selectedIds={drawingTools.selectedIds}
+            onFocus={focusElement}
+          />
+
           <div className="panel-spacer" />
           <div className="panel-attribution">
             <span>Fuente cartográfica</span>
@@ -184,12 +208,27 @@ export default function App() {
           <MapView
             mapRef={mapRef}
             baseLayerRef={baseLayerRef}
+            drawingsLayer={drawingTools.layer}
             onStatusChange={handleMapStatus}
+            onMapReady={drawingTools.connectMap}
+            onCenterChange={handleMapCenterChange}
+          />
+
+          <DrawingToolbar
+            activeTool={drawingTools.activeTool}
+            selectedCount={drawingTools.selectedIds.length}
+            drawingInProgress={drawingTools.drawingInProgress}
+            onToolChange={drawingTools.setActiveTool}
+            onCancel={drawingTools.cancelDrawing}
+            onDelete={drawingTools.deleteSelected}
           />
 
           <div className="map-location-chip">
             <MapPin size={15} aria-hidden="true" />
-            <span>Creta, Grecia</span>
+            <span>Centro del mapa</span>
+            <span className="map-center-coordinates">
+              {formatCoordinate(mapCenter[1], "N", "S")}, {formatCoordinate(mapCenter[0], "E", "O")}
+            </span>
           </div>
 
           <div className="map-controls" aria-label="Controles del mapa">

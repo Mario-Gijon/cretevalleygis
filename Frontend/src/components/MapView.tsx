@@ -1,12 +1,17 @@
 import { useEffect, useRef } from "react";
+import type Feature from "ol/Feature.js";
 import type Map from "ol/Map.js";
 import Attribution from "ol/control/Attribution.js";
 import { defaults as defaultControls } from "ol/control/defaults.js";
-import { fromLonLat } from "ol/proj.js";
+import { fromLonLat, toLonLat } from "ol/proj.js";
 import OSM from "ol/source/OSM.js";
-import TileLayer from "ol/layer/Tile.js";
 import OlMap from "ol/Map.js";
+import type VectorLayer from "ol/layer/Vector.js";
+import type Geometry from "ol/geom/Geometry.js";
+import TileLayer from "ol/layer/Tile.js";
+import type VectorSource from "ol/source/Vector.js";
 import View from "ol/View.js";
+import { CRETE_CENTER } from "@/lib/map-config";
 
 export type MapStatus = {
   ready: boolean;
@@ -19,15 +24,19 @@ type MutableRef<T> = { current: T };
 type MapViewProps = {
   mapRef: MutableRef<Map | null>;
   baseLayerRef: MutableRef<TileLayer<OSM> | null>;
+  drawingsLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
   onStatusChange: (status: MapStatus) => void;
+  onMapReady: (map: Map) => (() => void) | void;
+  onCenterChange: (center: [number, number]) => void;
 };
-
-const CRETE_CENTER = [25.13, 35.22] as const;
 
 export default function MapView({
   mapRef,
   baseLayerRef,
+  drawingsLayer,
   onStatusChange,
+  onMapReady,
+  onCenterChange,
 }: MapViewProps) {
   const targetRef = useRef<HTMLDivElement>(null);
 
@@ -41,7 +50,7 @@ export default function MapView({
     const baseLayer = new TileLayer({ source });
     const map = new OlMap({
       target: targetRef.current,
-      layers: [baseLayer],
+      layers: [baseLayer, drawingsLayer],
       controls: defaultControls({
         attribution: false,
         rotate: false,
@@ -82,27 +91,36 @@ export default function MapView({
     map.once("rendercomplete", firstRender);
     mapRef.current = map;
     baseLayerRef.current = baseLayer;
+    const updateCenter = () => {
+      const center = map.getView().getCenter();
+      if (!center) return;
+      const [longitude, latitude] = toLonLat(center);
+      onCenterChange([longitude, latitude]);
+    };
+    map.on("moveend", updateCenter);
+    updateCenter();
+    const detachDrawingTools = onMapReady(map);
 
     return () => {
       source.un("tileloadstart", tileStarted);
       source.un("tileloadend", tileLoaded);
       source.un("tileloaderror", tileFailed);
       map.un("rendercomplete", firstRender);
+      map.un("moveend", updateCenter);
+      detachDrawingTools?.();
       map.setTarget(undefined);
       mapRef.current = null;
       baseLayerRef.current = null;
     };
-  }, [baseLayerRef, mapRef, onStatusChange]);
+  }, [baseLayerRef, drawingsLayer, mapRef, onCenterChange, onMapReady, onStatusChange]);
 
   return (
     <div
       ref={targetRef}
       className="map-canvas"
       role="application"
-      aria-label="Mapa interactivo de Creta"
+      aria-label="Mapa interactivo"
       tabIndex={0}
     />
   );
 }
-
-export { CRETE_CENTER };
