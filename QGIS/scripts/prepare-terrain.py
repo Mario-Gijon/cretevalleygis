@@ -23,15 +23,11 @@ from osgeo import gdal
 from qgis.core import (
     Qgis,
     QgsApplication,
-    QgsColorRampShader,
-    QgsContrastEnhancement,
     QgsProject,
     QgsRasterLayer,
-    QgsRasterShader,
-    QgsSingleBandGrayRenderer,
-    QgsSingleBandPseudoColorRenderer,
 )
-from qgis.PyQt.QtGui import QColor
+from terrain_style import style_elevation as apply_shared_elevation_style
+from terrain_style import style_hillshade as apply_shared_hillshade_style
 
 
 DATA_ROOT = Path("/io/data/terrain")
@@ -481,36 +477,11 @@ def build_derived(
 
 
 def set_elevation_renderer(layer: QgsRasterLayer, minimum: float, maximum: float) -> None:
-    if maximum <= minimum:
-        maximum = minimum + 1.0
-    fractions = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
-    colors = ("#315b82", "#4b906f", "#9db76f", "#d0bd79", "#a97858", "#f3efe4")
-    labels = ("Baja", "", "", "", "", "Alta")
-    ramp_items = [
-        QgsColorRampShader.ColorRampItem(
-            minimum + (maximum - minimum) * fraction,
-            QColor(color),
-            label or f"{minimum + (maximum - minimum) * fraction:.0f} m",
-        )
-        for fraction, color, label in zip(fractions, colors, labels)
-    ]
-    shader_function = QgsColorRampShader(minimum, maximum)
-    shader_function.setColorRampType(QgsColorRampShader.Interpolated)
-    shader_function.setColorRampItemList(ramp_items)
-    shader = QgsRasterShader(minimum, maximum)
-    shader.setRasterShaderFunction(shader_function)
-    layer.setRenderer(QgsSingleBandPseudoColorRenderer(layer.dataProvider(), 1, shader))
+    apply_shared_elevation_style(layer)
 
 
 def style_hillshade(layer: QgsRasterLayer) -> None:
-    provider = layer.dataProvider()
-    renderer = QgsSingleBandGrayRenderer(provider, 1)
-    enhancement = QgsContrastEnhancement(provider.dataType(1))
-    enhancement.setContrastEnhancementAlgorithm(QgsContrastEnhancement.StretchToMinimumMaximum)
-    enhancement.setMinimumValue(1)
-    enhancement.setMaximumValue(255)
-    renderer.setContrastEnhancement(enhancement)
-    layer.setRenderer(renderer)
+    apply_shared_hillshade_style(layer)
 
 
 def set_raster_metadata(layer: QgsRasterLayer, title: str, abstract: str) -> None:
@@ -549,6 +520,7 @@ def add_terrain_to_project(elevation_path: Path, hillshade_path: Path, record: d
         f"Area: {area_name}; extent WGS84: {bbox[0]:.6f},{bbox[1]:.6f},"
         f"{bbox[2]:.6f},{bbox[3]:.6f}; elevation min/max m: {min_m:.1f}/{max_m:.1f}; "
         f"horizontal CRS: {crs}; vertical datum: EGM2008; NoData: {SOURCE_NODATA:g}. "
+        "Detailed Copernicus data is visible at scales 1:1,000,000 and closer. "
         "Copernicus GLO-30 Public is a digital surface model (vegetation and buildings can affect elevations)."
     )
     elevation = QgsRasterLayer(str(elevation_path), "terrain_elevation", "gdal")
@@ -557,6 +529,10 @@ def add_terrain_to_project(elevation_path: Path, hillshade_path: Path, record: d
         raise RuntimeError("QGIS could not load both terrain rasters")
     set_elevation_renderer(elevation, min_m, max_m)
     style_hillshade(hillshade)
+    for layer in (elevation, hillshade):
+        layer.setScaleBasedVisibility(True)
+        layer.setMinimumScale(1_000_000.0)
+        layer.setMaximumScale(0.0)
     set_raster_metadata(elevation, f"Elevación del terreno — {area_name}", f"{PRODUCT}, 30 m; elevation units: metres. {shared_abstract}")
     set_raster_metadata(hillshade, f"Relieve sombreado — {area_name}", f"Hillshade derived with GDAL from {PRODUCT}, 30 m. {shared_abstract}")
     project.addMapLayer(elevation)

@@ -54,7 +54,11 @@ type MapViewProps = {
   onOverlayAvailabilityChange: (id: GeographicOverlayId, available: boolean) => void;
   onTopographicAvailabilityChange: (id: TopographicLayerId, available: boolean) => void;
   onMapReady: (map: Map) => (() => void) | void;
-  onCenterChange: (center: [number, number], extent: [number, number, number, number]) => void;
+  onCenterChange: (
+    center: [number, number],
+    extent: [number, number, number, number],
+    resolution: number,
+  ) => void;
 };
 
 export default function MapView({
@@ -124,7 +128,7 @@ export default function MapView({
         new ImageWMS({
           url: "/qgis/ogc/world",
           params: {
-            LAYERS: layer.wmsLayer,
+            LAYERS: `${layer.globalWmsLayer},${layer.wmsLayer}`,
             VERSION: "1.3.0",
             FORMAT: "image/png",
             TRANSPARENT: true,
@@ -273,11 +277,9 @@ export default function MapView({
       source.on("imageloadend", listeners.onTileLoad);
       source.on("imageloaderror", listeners.onTileError);
     });
-    Object.entries(topographicSources).forEach(([id, source]) => {
-      const listeners = topographicListeners.find((item) => item.id === id);
-      if (!listeners) return;
-      source.on("imageloadend", listeners.onLoad);
-      source.on("imageloaderror", listeners.onError);
+    topographicListeners.forEach(({ source, onLoad, onError }) => {
+      source.on("imageloadend", onLoad);
+      source.on("imageloaderror", onError);
     });
     map.once("rendercomplete", firstRender);
     mapRef.current = map;
@@ -290,7 +292,7 @@ export default function MapView({
       const extent = size
         ? transformExtent(map.getView().calculateExtent(size), "EPSG:3857", "EPSG:4326") as [number, number, number, number]
         : [longitude, latitude, longitude, latitude] as [number, number, number, number];
-      onCenterChange([longitude, latitude], extent);
+      onCenterChange([longitude, latitude], extent, map.getView().getResolution() ?? 0);
     };
     map.on("moveend", updateCenter);
     map.on("change:size", updateCenter);

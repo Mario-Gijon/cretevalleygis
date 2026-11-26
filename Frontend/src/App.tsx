@@ -40,6 +40,7 @@ import {
 import {
   DEFAULT_TOPOGRAPHIC_OPACITY,
   DEFAULT_TOPOGRAPHIC_VISIBILITY,
+  DETAILED_TERRAIN_MAX_RESOLUTION,
   TOPOGRAPHIC_LAYERS,
   parseTerrainCoverage,
   type TerrainCoverage,
@@ -93,6 +94,7 @@ export default function App() {
   const [terrainCoverage, setTerrainCoverage] = useState<TerrainCoverage | null>(null);
   const [terrainServiceState, setTerrainServiceState] = useState<"loading" | "available" | "unavailable">("loading");
   const [mapExtent, setMapExtent] = useState<[number, number, number, number] | null>(null);
+  const [mapResolution, setMapResolution] = useState<number | null>(null);
   const [qgisStatus, setQgisStatus] = useState<QgisStatus>("idle");
   const [mapStatus, setMapStatus] = useState<MapStatus>({
     ready: false,
@@ -105,9 +107,14 @@ export default function App() {
     setMapStatus(status);
   }, []);
 
-  const handleMapCenterChange = useCallback((center: [number, number], extent: [number, number, number, number]) => {
+  const handleMapCenterChange = useCallback((
+    center: [number, number],
+    extent: [number, number, number, number],
+    resolution: number,
+  ) => {
     setMapCenter(center);
     setMapExtent(extent);
+    setMapResolution(resolution);
   }, []);
 
   const handleQgisStatusChange = useCallback((status: QgisStatus) => {
@@ -158,6 +165,12 @@ export default function App() {
     setTopographicAvailability((current) => current[id] === available ? current : { ...current, [id]: available });
     if (available) setTerrainServiceState("available");
   }, []);
+
+  const detailedTerrainActive = Boolean(
+    terrainCoverage && mapExtent && mapResolution !== null &&
+    mapResolution <= DETAILED_TERRAIN_MAX_RESOLUTION &&
+    extentsIntersect(mapExtent, terrainCoverage.extent),
+  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -408,7 +421,7 @@ export default function App() {
 
           <section className="layer-section topography-section" aria-labelledby="topography-title">
             <h2 className="eyebrow" id="topography-title">TOPOGRAFÍA</h2>
-            <p className="overlay-intro">Relieve local de 30 m. Modelo de superficie: puede incluir edificios y vegetación.</p>
+            <p className="overlay-intro">ETOPO 2022 ofrece una vista mundial; el detalle Copernicus de 30 m aparece al acercar donde hay cobertura.</p>
             <div className="topographic-layer-list">
               {([
                 ["hillshade", Mountain],
@@ -457,10 +470,11 @@ export default function App() {
             </div>
             {topographicVisibility.elevation && terrainCoverage && (
               <div className="elevation-legend" aria-label="Leyenda de elevación en metros">
-                <span className="elevation-legend-title">Elevación sobre EGM2008 (m)</span>
+                <span className="elevation-legend-title">ETOPO · altura y profundidad (m)</span>
                 <div className="elevation-legend-gradient" aria-hidden="true" />
                 <div className="elevation-legend-values">
                   <span>{Math.round(terrainCoverage.minElevation)} m</span>
+                  <span>0 m</span>
                   <span>{Math.round(terrainCoverage.maxElevation)} m</span>
                 </div>
               </div>
@@ -473,17 +487,17 @@ export default function App() {
                 El servicio de elevación no está disponible. El mapa base y las herramientas siguen funcionando.
               </p>
             )}
-            {terrainServiceState === "available" && terrainCoverage && mapExtent && (
-              extentsIntersect(mapExtent, terrainCoverage.extent) ? (
-                <p className="terrain-coverage-note" role="status">
-                  Datos preparados en {terrainCoverage.areaName}. El resto del territorio no tiene cobertura en este volumen.
-                </p>
-              ) : (
-                <p className="terrain-coverage-note terrain-coverage-note--empty" role="status">
-                  Sin datos topográficos preparados en esta zona. El área transparente no representa una elevación de 0 m; la cobertura disponible está en {terrainCoverage.areaName}.
-                </p>
-              )
+            {terrainServiceState === "available" && terrainCoverage && (
+              <p className="terrain-coverage-note" role="status">
+                {detailedTerrainActive
+                  ? `Relieve detallado de 30 m disponible en ${terrainCoverage.areaName}; ETOPO mundial completa el resto. Para análisis futuros, aún habrá que validar y preparar estos datos.`
+                  : `ETOPO mundial de 60″ para visualización general. Al acercar en ${terrainCoverage.areaName} aparece el relieve de 30 m; ETOPO no está destinado a navegación ni sustituye datos preparados para análisis.`}
+              </p>
             )}
+            <div className="copernicus-notice">
+              <span>ETOPO 2022 · NOAA NCEI · DOI: 10.25921/fd45-gt74 · CC0 1.0.</span>
+              <a href="https://www.ncei.noaa.gov/products/etopo-global-relief-model" target="_blank" rel="noreferrer">Fuente y documentación NOAA</a>
+            </div>
             <div className="copernicus-notice">
               <span>© DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.</span>
               <span>Produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.</span>

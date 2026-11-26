@@ -44,7 +44,7 @@ docker compose run --rm --no-deps qgis-world-data
 docker compose restart qgis-server
 ```
 
-La etapa de elevación reutiliza la tesela y los derivados si sus checksums y metadatos siguen válidos. Un fallo en la descarga o procesamiento topográfico no impide que se sirvan Natural Earth y el frontend. En el visor, las dos capas aparecen apagadas por defecto y tienen controles de opacidad. La leyenda dinámica indica el rango de elevación de la zona preparada; al navegar fuera de ella se avisa que no hay datos.
+La etapa de elevación reutiliza la tesela y los derivados si sus checksums y metadatos siguen válidos. Un fallo en la descarga o procesamiento topográfico no impide que se sirvan Natural Earth y el frontend. En el visor, las dos capas aparecen apagadas por defecto y tienen controles de opacidad. La leyenda usa una escala común de altitudes y profundidades.
 
 ### Copernicus DEM: licencia y atribución
 
@@ -58,6 +58,21 @@ Aviso de responsabilidad: “The organisations in charge of the Copernicus progr
 
 Fuentes oficiales: [producto, especificaciones y licencia](https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM), [bucket público y acceso sin cuenta AWS](https://registry.opendata.aws/copernicus-dem/), [estructura COG](https://copernicus-dem-30m.s3.amazonaws.com/readme.html) y [licencia del GLO-30](https://dataspace.copernicus.eu/sites/default/files/media/files/2025-06/copernicus_contributing_mission_data_access_v2_cop_dem_licenses.pdf).
 
+## Relieve mundial y resolución automática
+
+El fallback mundial utiliza **ETOPO 2022 surface, 60 arc-seconds** de NOAA NCEI: un solo GeoTIFF de cobertura global que integra elevación terrestre y batimetría oceánica, con celdas de aproximadamente 1,85 km en el ecuador. Su CRS horizontal es WGS84 (EPSG:4326) y las alturas están referidas a EGM2008. NOAA publica el producto bajo CC0 1.0 y recomienda citarlo mediante el [DOI 10.25921/fd45-gt74](https://doi.org/10.25921/fd45-gt74); no es apto para navegación.
+
+El GeoTIFF original se guarda separado en `terrain/global/source`; GDAL crea productos `terrain/global/derived` comprimidos, en bloques y con pirámides internas. La caché GDAL está limitada a 192 MiB y las estadísticas se procesan por bloques. En la preparación actual, el original ocupa 465.969.062 bytes y los dos derivados 746.076.156 bytes en el volumen Docker. Los rásteres no se guardan en Git. ETOPO permanece debajo de Copernicus, de forma que cubre el mundo y las batimetrías donde el DEM detallado es transparente. QGIS limita las capas Copernicus locales a escala 1:1.000.000 y más cercana: al alejarse se usa el relieve mundial; al acercarse, el de 30 m se superpone dentro de su cobertura. El usuario conserva una sola casilla y una opacidad por tipo de capa.
+
+ETOPO 60″ sirve para visualización general, no para navegación ni como dato local validado para análisis detallados. Copernicus de 30 m ofrece mayor detalle visual en el macizo del Ida, pero sigue siendo un DSM y requiere validación específica antes de un uso analítico. Los valores negativos representan batimetría; NoData permanece transparente y no se confunde con 0 m. La interfaz muestra el rango mundial de elevación y la resolución disponible. Fuentes: [NOAA ETOPO Global Relief Model](https://www.ncei.noaa.gov/products/etopo-global-relief-model) y [guía del producto](https://www.ngdc.noaa.gov/mgg/global/relief/ETOPO2022/docs/1.2%20ETOPO%202022%20User%20Guide.pdf).
+
+Para preparar o actualizar las capas sin volver a descargar datos válidos:
+
+```bash
+docker compose run --rm --no-deps qgis-world-data
+docker compose restart qgis-server
+```
+
 Pruebas directas del servicio:
 
 ```bash
@@ -65,6 +80,8 @@ curl 'http://localhost:8085/ogc/world?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapab
 curl -o /tmp/crete-world.png 'http://localhost:8085/ogc/world?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&CRS=EPSG:3857&BBOX=-20037508,-10018754,20037508,10018754&WIDTH=1024&HEIGHT=512&LAYERS=land_110m,land_50m,land_10m,countries_110m,countries_50m,countries_10m&STYLES=&FORMAT=image/png'
 curl -o /tmp/crete-hillshade.png 'http://localhost:8085/ogc/world?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&CRS=EPSG:3857&BBOX=2730000,4140000,2840000,4260000&WIDTH=900&HEIGHT=700&LAYERS=terrain_hillshade&STYLES=&FORMAT=image/png&TRANSPARENT=TRUE'
 curl -o /tmp/crete-elevation.png 'http://localhost:8085/ogc/world?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&CRS=EPSG:3857&BBOX=2730000,4140000,2840000,4260000&WIDTH=900&HEIGHT=700&LAYERS=terrain_elevation&STYLES=&FORMAT=image/png&TRANSPARENT=TRUE'
+curl -o /tmp/world-elevation.png 'http://localhost:8085/ogc/world?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&CRS=EPSG:3857&BBOX=-20037508,-10018754,20037508,10018754&WIDTH=1024&HEIGHT=512&LAYERS=terrain_elevation_global&STYLES=&FORMAT=image/png&TRANSPARENT=TRUE'
+curl -o /tmp/world-hillshade.png 'http://localhost:8085/ogc/world?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&CRS=EPSG:3857&BBOX=-20037508,-10018754,20037508,10018754&WIDTH=1024&HEIGHT=512&LAYERS=terrain_hillshade_global&STYLES=&FORMAT=image/png&TRANSPARENT=TRUE'
 ```
 
 Natural Earth publica los datos en dominio público; la atribución es opcional y la interfaz incluye “Made with Natural Earth”. OpenStreetMap se mantiene como mapa base alternativo y requiere atribución visible. Las descargas iniciales de vectores y elevación requieren Internet. Esta configuración es para desarrollo local, no para producción.

@@ -1,13 +1,15 @@
 export const TOPOGRAPHIC_LAYERS = {
   hillshade: {
     title: "Relieve sombreado",
-    description: "Formas del terreno iluminadas",
+    description: "Relieve mundial y detalle local disponible",
     wmsLayer: "terrain_hillshade",
+    globalWmsLayer: "terrain_hillshade_global",
   },
   elevation: {
     title: "Elevación del terreno",
-    description: "Modelo de superficie · metros",
+    description: "Elevaciones y batimetría · metros",
     wmsLayer: "terrain_elevation",
+    globalWmsLayer: "terrain_elevation_global",
   },
 } as const;
 
@@ -22,7 +24,11 @@ export type TerrainCoverage = {
   minElevation: number;
   maxElevation: number;
   horizontalCrs: string;
+  detailedScaleDenominator: number;
 };
+
+export const DETAILED_TERRAIN_SCALE_DENOMINATOR = 1_000_000;
+export const DETAILED_TERRAIN_MAX_RESOLUTION = DETAILED_TERRAIN_SCALE_DENOMINATOR * 0.00028;
 
 export const DEFAULT_TOPOGRAPHIC_VISIBILITY: TopographicVisibility = {
   hillshade: false,
@@ -52,13 +58,16 @@ export function parseTerrainCoverage(xml: string): TerrainCoverage | null {
   const namedLayer = (name: string) => layers.find((layer) => directChild(layer, "Name")?.textContent?.trim() === name);
   const elevationLayer = namedLayer(TOPOGRAPHIC_LAYERS.elevation.wmsLayer);
   const hillshadeLayer = namedLayer(TOPOGRAPHIC_LAYERS.hillshade.wmsLayer);
-  if (!elevationLayer || !hillshadeLayer) return null;
+  const globalElevationLayer = namedLayer(TOPOGRAPHIC_LAYERS.elevation.globalWmsLayer);
+  const globalHillshadeLayer = namedLayer(TOPOGRAPHIC_LAYERS.hillshade.globalWmsLayer);
+  if (!elevationLayer || !hillshadeLayer || !globalElevationLayer || !globalHillshadeLayer) return null;
 
   const abstract = directChild(elevationLayer, "Abstract")?.textContent ?? "";
+  const globalAbstract = directChild(globalElevationLayer, "Abstract")?.textContent ?? "";
   const extentMatch = abstract.match(/extent WGS84:\s*(-?[\d.]+),(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)/i);
-  const rangeMatch = abstract.match(/elevation min\/max m:\s*(-?[\d.]+)\/(-?[\d.]+)/i);
+  const rangeMatch = globalAbstract.match(/elevation min\/max m:\s*(-?[\d.]+)\/(-?[\d.]+)/i);
   const areaMatch = abstract.match(/Area:\s*([^;]+)/i);
-  const crsMatch = abstract.match(/horizontal CRS:\s*([^;]+)/i);
+  const crsMatch = globalAbstract.match(/horizontal CRS:\s*([^;]+)/i);
 
   const geographicBox = directChild(elevationLayer, "EX_GeographicBoundingBox");
   const extentFromCapabilities = geographicBox
@@ -87,5 +96,6 @@ export function parseTerrainCoverage(xml: string): TerrainCoverage | null {
     minElevation,
     maxElevation,
     horizontalCrs: crsMatch?.[1]?.trim() || "CRS local",
+    detailedScaleDenominator: DETAILED_TERRAIN_SCALE_DENOMINATOR,
   };
 }
