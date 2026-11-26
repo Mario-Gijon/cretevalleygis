@@ -680,6 +680,48 @@ button {
   font-size: 11px;
 }
 
+.trace-context-menu {
+  position: absolute;
+  z-index: 8;
+  display: flex;
+  width: 224px;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-raised) 97%, transparent);
+  box-shadow: 0 8px 24px rgb(5 41 76 / 20%);
+  backdrop-filter: blur(12px);
+}
+
+.trace-context-menu-title {
+  padding: 3px 8px 5px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.trace-context-menu .ui-button {
+  min-height: 37px;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 0 9px;
+  border-radius: 8px;
+  font-size: 11px;
+  text-align: left;
+}
+
+.trace-context-menu .trace-context-menu-cancel {
+  color: #a7372e;
+}
+
+.app-shell[data-theme="dark"] .trace-context-menu .trace-context-menu-cancel {
+  color: #ffaaa3;
+}
+
 .drawing-toolbar-divider {
   width: 1px;
   height: 23px;
@@ -725,6 +767,13 @@ button {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   font-weight: 650;
+}
+
+.measurement-readout--provisional {
+  width: fit-content;
+  padding: 3px 6px;
+  border: 1px dashed currentColor;
+  border-radius: 6px;
 }
 
 .measurement-hint {
@@ -968,6 +1017,12 @@ button {
 
   .drawing-toolbar .drawing-action-button {
     min-height: 34px;
+    padding: 0 7px;
+  }
+
+  .trace-context-menu {
+    width: 224px;
+    max-width: calc(100% - 16px);
   }
 
   .drawing-toolbar-divider {

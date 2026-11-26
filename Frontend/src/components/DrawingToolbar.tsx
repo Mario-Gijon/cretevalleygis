@@ -10,6 +10,7 @@ import {
   Ruler,
   Route,
   Trash2,
+  Undo2,
   X,
 } from "lucide-react";
 import type { MapTool, MeasurementTool } from "@/hooks/useDrawingTools";
@@ -27,6 +28,8 @@ type DrawingToolbarProps = {
   onClearMeasurements: () => void;
   onFinishTrace: () => void;
   canFinishTrace: boolean;
+  canUndoVertex: boolean;
+  onUndoVertex: () => void;
   onDelete: () => void;
 };
 
@@ -42,15 +45,15 @@ const tools = [
 const instructions = {
   navigate: "Arrastra para mover el mapa. Pulsa Explorar o Escape para salir de una herramienta.",
   point: "Pulsa en el mapa para colocar un punto. Se guarda al instante; Escape sale.",
-  line: "Añade al menos 2 puntos. Termina con Terminar, doble clic o Enter; Escape cancela.",
-  polygon: "Marca al menos 3 vértices. Termina con Terminar, doble clic o Enter; Escape cancela.",
+  line: "Añade 2 puntos. Termina con clic derecho, Enter o Terminar; doble clic también funciona. Ctrl+Z deshace; Escape cancela.",
+  polygon: "Marca 3 vértices. Termina con clic derecho, Enter o Terminar; doble clic también funciona. Ctrl+Z deshace; Escape cancela.",
   select: "Pulsa un elemento para seleccionarlo. Después puedes borrarlo con Supr o Eliminar.",
   modify: "Arrastra sus vértices para editarlo. Pulsa Supr o Eliminar para borrarlo.",
 } satisfies Record<(typeof tools)[number]["id"], string>;
 
 const measurementChoices: { id: MeasurementTool; label: string; instruction: string }[] = [
-  { id: "measure-distance", label: "Distancia", instruction: "Añade al menos 2 puntos. Termina con Terminar o Enter; Escape cancela." },
-  { id: "measure-area", label: "Superficie", instruction: "Marca al menos 3 vértices. Termina con Terminar o Enter; Escape cancela." },
+  { id: "measure-distance", label: "Distancia", instruction: "Añade 2 puntos. Termina con clic derecho, Enter o Terminar; Ctrl+Z deshace; Escape cancela." },
+  { id: "measure-area", label: "Superficie", instruction: "Marca 3 vértices. Termina con clic derecho, Enter o Terminar; Ctrl+Z deshace; Escape cancela." },
 ];
 
 function isMeasurementTool(tool: MapTool): tool is MeasurementTool {
@@ -67,6 +70,8 @@ export function DrawingToolbar({
   onClearMeasurements,
   onFinishTrace,
   canFinishTrace,
+  canUndoVertex,
+  onUndoVertex,
   onDelete,
 }: DrawingToolbarProps) {
   const [measureMenuOpen, setMeasureMenuOpen] = useState(false);
@@ -163,6 +168,19 @@ export function DrawingToolbar({
             <span>Terminar</span>
           </Button>
         )}
+        {drawingInProgress && canUndoVertex && (
+          <Button
+            variant="ghost"
+            size="small"
+            className="drawing-action-button"
+            aria-label={activeMeasurement ? "Deshacer último punto de la medición" : "Deshacer último vértice"}
+            title={activeMeasurement ? "Quitar el último punto confirmado" : "Quitar el último vértice confirmado"}
+            onClick={onUndoVertex}
+          >
+            <Undo2 size={16} aria-hidden="true" />
+            <span>Deshacer</span>
+          </Button>
+        )}
         {activeMeasurement && drawingInProgress && (
           <Button
             variant="ghost"
@@ -219,8 +237,9 @@ export function DrawingToolbar({
       <div className="drawing-instruction" role="status" aria-live="polite">
         <span>{instruction}</span>
         {measurementResult && (
-          <strong className="measurement-readout">
-            {measurementResult.kind === "distance" ? "Distancia" : "Superficie"}: {measurementResult.kind === "distance" ? formatDistance(measurementResult.value) : formatArea(measurementResult.value)}
+          <strong className={`measurement-readout ${activeMeasurement && drawingInProgress ? "measurement-readout--provisional" : ""}`}>
+            {activeMeasurement && drawingInProgress ? "Provisional · " : "Medición · "}
+            {measurementResult.kind === "distance" ? formatDistance(measurementResult.value) : formatArea(measurementResult.value)}
             {measurementResult.kind === "distance" && ` · ${measurementResult.vertices} puntos`}
             {measurementResult.kind === "area" && ` · ${measurementResult.vertices} vértices`}
           </strong>

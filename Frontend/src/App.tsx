@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import {
+  Check,
+  CornerUpLeft,
   Layers,
   LoaderCircle,
   Map,
@@ -8,6 +11,7 @@ import {
   Moon,
   PanelLeftClose,
   Plus,
+  Play,
   Sun,
   X,
 } from "lucide-react";
@@ -36,6 +40,8 @@ function initialTheme(): ThemeMode {
 }
 
 export default function App() {
+  const mapStageRef = useRef<HTMLElement | null>(null);
+  const traceMenuRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<OlMap | null>(null);
   const baseLayerRef = useRef<TileLayer<OSM> | null>(null);
   const drawingTools = useDrawingTools();
@@ -94,15 +100,49 @@ export default function App() {
     drawingTools.centerElement(id);
   };
 
+  const handleStageContextMenu = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+    if (!(event.target instanceof HTMLElement) || !event.target.closest(".map-canvas")) return;
+    const stage = event.currentTarget.getBoundingClientRect();
+    const opened = drawingTools.openTraceContextMenu({
+      x: event.clientX - stage.left,
+      y: event.clientY - stage.top,
+    });
+    if (opened) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }, [drawingTools.openTraceContextMenu]);
+
+  const handleTraceClickCapture = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+    if (drawingTools.traceContextMenu && !(event.target instanceof HTMLElement && event.target.closest(".trace-context-menu"))) {
+      drawingTools.continueTrace();
+    }
+  }, [drawingTools.continueTrace, drawingTools.traceContextMenu]);
+
+  useEffect(() => {
+    if (!drawingTools.traceContextMenu) return;
+    traceMenuRef.current?.querySelector<HTMLElement>("[role='menuitem']:not([disabled])")?.focus();
+  }, [drawingTools.traceContextMenu]);
+
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+      if (event.defaultPrevented || event.altKey) return;
 
       const target = event.target;
       if (
         target instanceof HTMLElement &&
         target.closest("input, textarea, select, [contenteditable='true'], [role='textbox']")
       ) return;
+
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z") {
+        if (!drawingTools.canUndoVertex) return;
+        event.preventDefault();
+        drawingTools.undoLastVertex();
+        return;
+      }
+
+      if (event.ctrlKey || event.metaKey) return;
+      if (event.key === "Enter" && target instanceof HTMLElement && target.closest(".trace-context-menu")) return;
 
       if (event.key === "Escape" && drawingTools.activeTool !== "navigate") {
         event.preventDefault();
@@ -121,14 +161,16 @@ export default function App() {
   }, [
     drawingTools.activeTool,
     drawingTools.canFinishTrace,
+    drawingTools.canUndoVertex,
     drawingTools.cancelDrawing,
     drawingTools.deleteSelected,
     drawingTools.finishTrace,
+    drawingTools.undoLastVertex,
     drawingTools.selectedIds.length,
   ]);
 
   return (
-    <div className="app-shell" data-theme={theme}>
+      <div className="app-shell" data-theme={theme} onClickCapture={handleTraceClickCapture}>
       <header className="app-header flex items-center justify-between">
         <div className="brand-lockup flex items-center gap-3">
           <div className="brand-mark" aria-hidden="true">
@@ -240,7 +282,12 @@ export default function App() {
           </div>
         </aside>
 
-        <section className="map-stage" aria-label="Visor cartográfico">
+        <section
+          ref={mapStageRef}
+          className="map-stage"
+          aria-label="Visor cartográfico"
+          onContextMenu={handleStageContextMenu}
+        >
           <MapView
             mapRef={mapRef}
             baseLayerRef={baseLayerRef}
@@ -261,8 +308,55 @@ export default function App() {
             onClearMeasurements={drawingTools.clearMeasurements}
             onFinishTrace={drawingTools.finishTrace}
             canFinishTrace={drawingTools.canFinishTrace}
+            canUndoVertex={drawingTools.canUndoVertex}
+            onUndoVertex={drawingTools.undoLastVertex}
             onDelete={drawingTools.deleteSelected}
           />
+
+          {drawingTools.traceContextMenu && (
+            <div
+              ref={traceMenuRef}
+              className="trace-context-menu"
+              role="menu"
+              aria-label={drawingTools.traceContextMenu.measurement ? "Acciones de medición" : "Acciones del trazado"}
+              style={{
+                left: Math.max(8, Math.min(drawingTools.traceContextMenu.x, (mapStageRef.current?.clientWidth ?? 260) - 232)),
+                top: Math.max(8, Math.min(drawingTools.traceContextMenu.y, (mapStageRef.current?.clientHeight ?? 220) - 212)),
+              }}
+              onContextMenu={(event) => event.preventDefault()}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                event.preventDefault();
+                const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("[role='menuitem']:not([disabled])"));
+                const index = items.indexOf(document.activeElement as HTMLElement);
+                const step = event.key === "ArrowDown" ? 1 : -1;
+                const nextIndex = index < 0
+                  ? (step > 0 ? 0 : items.length - 1)
+                  : (index + step + items.length) % items.length;
+                items[nextIndex]?.focus();
+              }}
+            >
+              <span className="trace-context-menu-title">
+                {drawingTools.traceContextMenu.measurement ? "Medición en curso" : "Trazado en curso"}
+              </span>
+              <Button role="menuitem" variant="ghost" size="small" disabled={!drawingTools.canFinishTrace} onClick={drawingTools.finishTrace}>
+                <Check size={15} aria-hidden="true" />
+                <span>Finalizar {drawingTools.traceContextMenu.measurement ? "medición" : "trazado"}</span>
+              </Button>
+              <Button role="menuitem" variant="ghost" size="small" disabled={!drawingTools.canUndoVertex} onClick={drawingTools.undoLastVertex}>
+                <CornerUpLeft size={15} aria-hidden="true" />
+                <span>Deshacer último {drawingTools.traceContextMenu.measurement ? "punto" : "vértice"}</span>
+              </Button>
+              <Button role="menuitem" variant="ghost" size="small" onClick={drawingTools.continueTrace}>
+                <Play size={15} aria-hidden="true" />
+                <span>Continuar {drawingTools.traceContextMenu.measurement ? "medición" : "trazado"}</span>
+              </Button>
+              <Button role="menuitem" variant="ghost" size="small" className="trace-context-menu-cancel" onClick={drawingTools.cancelDrawing}>
+                <X size={15} aria-hidden="true" />
+                <span>Cancelar {drawingTools.traceContextMenu.measurement ? "medición" : "trazado"}</span>
+              </Button>
+            </div>
+          )}
 
           <div className="map-location-chip">
             <MapPin size={15} aria-hidden="true" />
