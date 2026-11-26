@@ -520,7 +520,7 @@ def add_terrain_to_project(elevation_path: Path, hillshade_path: Path, record: d
         f"Area: {area_name}; extent WGS84: {bbox[0]:.6f},{bbox[1]:.6f},"
         f"{bbox[2]:.6f},{bbox[3]:.6f}; elevation min/max m: {min_m:.1f}/{max_m:.1f}; "
         f"horizontal CRS: {crs}; vertical datum: EGM2008; NoData: {SOURCE_NODATA:g}. "
-        "Detailed Copernicus data is visible at scales 1:1,000,000 and closer. "
+        "The application displays detailed Copernicus data only when map scale and viewport coverage are suitable. "
         "Copernicus GLO-30 Public is a digital surface model (vegetation and buildings can affect elevations)."
     )
     elevation = QgsRasterLayer(str(elevation_path), "terrain_elevation", "gdal")
@@ -529,10 +529,6 @@ def add_terrain_to_project(elevation_path: Path, hillshade_path: Path, record: d
         raise RuntimeError("QGIS could not load both terrain rasters")
     set_elevation_renderer(elevation, min_m, max_m)
     style_hillshade(hillshade)
-    for layer in (elevation, hillshade):
-        layer.setScaleBasedVisibility(True)
-        layer.setMinimumScale(1_000_000.0)
-        layer.setMaximumScale(0.0)
     set_raster_metadata(elevation, f"Elevación del terreno — {area_name}", f"{PRODUCT}, 30 m; elevation units: metres. {shared_abstract}")
     set_raster_metadata(hillshade, f"Relieve sombreado — {area_name}", f"Hillshade derived with GDAL from {PRODUCT}, 30 m. {shared_abstract}")
     project.addMapLayer(elevation)

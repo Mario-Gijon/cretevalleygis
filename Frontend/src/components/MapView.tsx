@@ -123,12 +123,11 @@ export default function MapView({
       ]),
     ) as OverlayLayers;
     const topographicSources = Object.fromEntries(
-      Object.entries(TOPOGRAPHIC_LAYERS).map(([id, layer]) => [
+      Object.entries(TOPOGRAPHIC_LAYERS).map(([id]) => [
         id,
         new ImageWMS({
           url: "/qgis/ogc/world",
           params: {
-            LAYERS: `${layer.globalWmsLayer},${layer.wmsLayer}`,
             VERSION: "1.3.0",
             FORMAT: "image/png",
             TRANSPARENT: true,

@@ -40,8 +40,10 @@ import {
 import {
   DEFAULT_TOPOGRAPHIC_OPACITY,
   DEFAULT_TOPOGRAPHIC_VISIBILITY,
-  DETAILED_TERRAIN_MAX_RESOLUTION,
   TOPOGRAPHIC_LAYERS,
+  TERRAIN_VISIBILITY_THRESHOLDS,
+  getTerrainCoverageRatio,
+  getTerrainRenderMode,
   parseTerrainCoverage,
   type TerrainCoverage,
   type TopographicAvailability,
@@ -58,13 +60,6 @@ function initialTheme(): ThemeMode {
   } catch {
     return "light";
   }
-}
-
-function extentsIntersect(
-  view: [number, number, number, number],
-  coverage: [number, number, number, number],
-): boolean {
-  return view[0] <= coverage[2] && view[2] >= coverage[0] && view[1] <= coverage[3] && view[3] >= coverage[1];
 }
 
 export default function App() {
@@ -148,7 +143,6 @@ export default function App() {
   };
 
   const changeTopographicVisibility = (id: TopographicLayerId, visible: boolean) => {
-    baseLayersRef.current?.topography[id].setVisible(visible);
     setTopographicVisibility((current) => ({ ...current, [id]: visible }));
   };
 
@@ -166,11 +160,30 @@ export default function App() {
     if (available) setTerrainServiceState("available");
   }, []);
 
-  const detailedTerrainActive = Boolean(
-    terrainCoverage && mapExtent && mapResolution !== null &&
-    mapResolution <= DETAILED_TERRAIN_MAX_RESOLUTION &&
-    extentsIntersect(mapExtent, terrainCoverage.extent),
-  );
+  const terrainRenderMode = terrainServiceState === "available"
+    ? getTerrainRenderMode(mapExtent, mapResolution, terrainCoverage)
+    : "hidden";
+  const detailedCoverageRatio = getTerrainCoverageRatio(mapExtent, terrainCoverage);
+  const hasDetailedCoverageForView = detailedCoverageRatio >= TERRAIN_VISIBILITY_THRESHOLDS.detailedMinViewCoverageRatio;
+  const hasTopographicPreference = topographicVisibility.hillshade || topographicVisibility.elevation;
+
+  useEffect(() => {
+    const layers = baseLayersRef.current?.topography;
+    if (!layers) return;
+
+    (Object.keys(TOPOGRAPHIC_LAYERS) as TopographicLayerId[]).forEach((id) => {
+      const layer = layers[id];
+      const source = layer.getSource();
+      if (!source) return;
+      const shouldRender = terrainServiceState === "available" && topographicVisibility[id] && terrainRenderMode !== "hidden";
+      if (shouldRender) {
+        const names = TOPOGRAPHIC_LAYERS[id];
+        const requestedLayer = terrainRenderMode === "detailed" ? names.wmsLayer : names.globalWmsLayer;
+        if (source.getParams().LAYERS !== requestedLayer) source.updateParams({ LAYERS: requestedLayer });
+      }
+      if (layer.getVisible() !== shouldRender) layer.setVisible(shouldRender);
+    });
+  }, [terrainRenderMode, terrainServiceState, topographicVisibility]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -421,7 +434,7 @@ export default function App() {
 
           <section className="layer-section topography-section" aria-labelledby="topography-title">
             <h2 className="eyebrow" id="topography-title">TOPOGRAFÍA</h2>
-            <p className="overlay-intro">ETOPO 2022 ofrece una vista mundial; el detalle Copernicus de 30 m aparece al acercar donde hay cobertura.</p>
+            <p className="overlay-intro">La capa visible se ajusta a la escala y cobertura del mapa.</p>
             <div className="topographic-layer-list">
               {([
                 ["hillshade", Mountain],
@@ -468,9 +481,9 @@ export default function App() {
                 );
               })}
             </div>
-            {topographicVisibility.elevation && terrainCoverage && (
+            {topographicVisibility.elevation && terrainCoverage && terrainRenderMode !== "hidden" && (
               <div className="elevation-legend" aria-label="Leyenda de elevación en metros">
-                <span className="elevation-legend-title">ETOPO · altura y profundidad (m)</span>
+                <span className="elevation-legend-title">Elevación · altura y profundidad (m)</span>
                 <div className="elevation-legend-gradient" aria-hidden="true" />
                 <div className="elevation-legend-values">
                   <span>{Math.round(terrainCoverage.minElevation)} m</span>
@@ -489,9 +502,17 @@ export default function App() {
             )}
             {terrainServiceState === "available" && terrainCoverage && (
               <p className="terrain-coverage-note" role="status">
-                {detailedTerrainActive
-                  ? `Relieve detallado de 30 m disponible en ${terrainCoverage.areaName}; ETOPO mundial completa el resto. Para análisis futuros, aún habrá que validar y preparar estos datos.`
-                  : `ETOPO mundial de 60″ para visualización general. Al acercar en ${terrainCoverage.areaName} aparece el relieve de 30 m; ETOPO no está destinado a navegación ni sustituye datos preparados para análisis.`}
+                {!hasTopographicPreference
+                  ? "Relieve desactivado."
+                  : terrainRenderMode === "detailed"
+                    ? "Relieve detallado activo · 30 m."
+                    : terrainRenderMode === "global"
+                      ? hasDetailedCoverageForView
+                        ? "Relieve mundial activo · 60″. El detalle aparece al acercar."
+                        : "Relieve mundial activo · 60″. Sin cobertura detallada suficiente en esta vista."
+                      : hasDetailedCoverageForView
+                        ? "Relieve oculto por escala; se mantiene el mapa base."
+                        : "Sin cobertura detallada suficiente; el relieve se oculta y se mantiene el mapa base."}
               </p>
             )}
             <div className="copernicus-notice">

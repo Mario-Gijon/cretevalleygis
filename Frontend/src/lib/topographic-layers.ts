@@ -1,7 +1,7 @@
 export const TOPOGRAPHIC_LAYERS = {
   hillshade: {
     title: "Relieve sombreado",
-    description: "Relieve mundial y detalle local disponible",
+    description: "Según escala y cobertura",
     wmsLayer: "terrain_hillshade",
     globalWmsLayer: "terrain_hillshade_global",
   },
@@ -24,11 +24,17 @@ export type TerrainCoverage = {
   minElevation: number;
   maxElevation: number;
   horizontalCrs: string;
-  detailedScaleDenominator: number;
 };
 
-export const DETAILED_TERRAIN_SCALE_DENOMINATOR = 1_000_000;
-export const DETAILED_TERRAIN_MAX_RESOLUTION = DETAILED_TERRAIN_SCALE_DENOMINATOR * 0.00028;
+export const TERRAIN_VISIBILITY_THRESHOLDS = {
+  // At 800 projected metres per screen pixel, ETOPO's 60″ cells stay near
+  // two screen pixels. Closer views hide the coarse global raster.
+  globalMinResolution: 800,
+  // Copernicus GLO-30 is only requested close to its native resolution.
+  detailedMaxResolution: 60,
+  // Require most of the viewport to have 30 m data to avoid isolated blocks.
+  detailedMinViewCoverageRatio: 0.8,
+} as const;
 
 export const DEFAULT_TOPOGRAPHIC_VISIBILITY: TopographicVisibility = {
   hillshade: false,
@@ -36,9 +42,41 @@ export const DEFAULT_TOPOGRAPHIC_VISIBILITY: TopographicVisibility = {
 };
 
 export const DEFAULT_TOPOGRAPHIC_OPACITY: TopographicOpacity = {
-  hillshade: 55,
-  elevation: 70,
+  hillshade: 15,
+  elevation: 10,
 };
+
+export type TerrainRenderMode = "global" | "detailed" | "hidden";
+
+export function getTerrainCoverageRatio(
+  view: [number, number, number, number] | null,
+  coverage: TerrainCoverage | null,
+): number {
+  if (!view || !coverage) return 0;
+  const viewArea = (view[2] - view[0]) * (view[3] - view[1]);
+  if (!(viewArea > 0)) return 0;
+  const width = Math.max(0, Math.min(view[2], coverage.extent[2]) - Math.max(view[0], coverage.extent[0]));
+  const height = Math.max(0, Math.min(view[3], coverage.extent[3]) - Math.max(view[1], coverage.extent[1]));
+  return Math.min(1, (width * height) / viewArea);
+}
+
+export function getTerrainRenderMode(
+  view: [number, number, number, number] | null,
+  resolution: number | null,
+  coverage: TerrainCoverage | null,
+): TerrainRenderMode {
+  if (resolution === null || !Number.isFinite(resolution) || resolution <= 0) return "hidden";
+  const detailedCoverageRatio = getTerrainCoverageRatio(view, coverage);
+  if (
+    coverage &&
+    resolution <= TERRAIN_VISIBILITY_THRESHOLDS.detailedMaxResolution &&
+    detailedCoverageRatio >= TERRAIN_VISIBILITY_THRESHOLDS.detailedMinViewCoverageRatio
+  ) {
+    return "detailed";
+  }
+  if (resolution >= TERRAIN_VISIBILITY_THRESHOLDS.globalMinResolution) return "global";
+  return "hidden";
+}
 
 function directChild(element: Element, name: string): Element | null {
   return Array.from(element.children).find((child) => child.localName === name) ?? null;
@@ -96,6 +134,5 @@ export function parseTerrainCoverage(xml: string): TerrainCoverage | null {
     minElevation,
     maxElevation,
     horizontalCrs: crsMatch?.[1]?.trim() || "CRS local",
-    detailedScaleDenominator: DETAILED_TERRAIN_SCALE_DENOMINATOR,
   };
 }

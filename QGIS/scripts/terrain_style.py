@@ -2,7 +2,9 @@
 
 from qgis.core import (
     QgsColorRampShader,
+    QgsBilinearRasterResampler,
     QgsContrastEnhancement,
+    Qgis,
     QgsRasterLayer,
     QgsRasterShader,
     QgsSingleBandGrayRenderer,
@@ -29,6 +31,16 @@ ELEVATION_COLOR_STOPS = (
 )
 
 
+def set_visual_resampling(layer: QgsRasterLayer) -> None:
+    """Smooth rendered pixels only; the source GeoTIFF values remain unchanged."""
+    resample_filter = layer.resampleFilter()
+    if resample_filter is None:
+        raise RuntimeError(f"QGIS has no raster resampling filter for {layer.name()}")
+    resample_filter.setZoomedInResampler(QgsBilinearRasterResampler())
+    resample_filter.setZoomedOutResampler(QgsBilinearRasterResampler())
+    layer.setResamplingStage(Qgis.RasterResamplingStage.ResampleFilter)
+
+
 def style_elevation(layer: QgsRasterLayer) -> None:
     items = [
         QgsColorRampShader.ColorRampItem(value, QColor(color), f"{value:g} m")
@@ -40,6 +52,7 @@ def style_elevation(layer: QgsRasterLayer) -> None:
     raster_shader = QgsRasterShader(ELEVATION_STYLE_MIN, ELEVATION_STYLE_MAX)
     raster_shader.setRasterShaderFunction(color_shader)
     layer.setRenderer(QgsSingleBandPseudoColorRenderer(layer.dataProvider(), 1, raster_shader))
+    set_visual_resampling(layer)
 
 
 def style_hillshade(layer: QgsRasterLayer) -> None:
@@ -51,3 +64,4 @@ def style_hillshade(layer: QgsRasterLayer) -> None:
     enhancement.setMaximumValue(255)
     renderer.setContrastEnhancement(enhancement)
     layer.setRenderer(renderer)
+    set_visual_resampling(layer)
