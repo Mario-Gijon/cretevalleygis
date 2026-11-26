@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import type Feature from "ol/Feature.js";
 import type Map from "ol/Map.js";
 import Attribution from "ol/control/Attribution.js";
-import ScaleLine from "ol/control/ScaleLine.js";
 import { defaults as defaultControls } from "ol/control/defaults.js";
 import { fromLonLat, toLonLat } from "ol/proj.js";
 import OSM from "ol/source/OSM.js";
@@ -60,7 +59,6 @@ export default function MapView({
         zoom: false,
       }).extend([
         new Attribution({ collapsible: false }),
-        new ScaleLine({ units: "metric", bar: true, steps: 4, text: true, minWidth: 90 }),
       ]),
       view: new View({
         center: fromLonLat([...CRETE_CENTER]),

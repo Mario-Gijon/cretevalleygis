@@ -43,7 +43,7 @@ const tools = [
 ] as const;
 
 const instructions = {
-  navigate: "Arrastra para mover el mapa. Pulsa Explorar o Escape para salir de una herramienta.",
+  navigate: "",
   point: "Pulsa en el mapa para colocar un punto. Se guarda al instante; Escape sale.",
   line: "Añade 2 puntos. Termina con clic derecho, Enter o Terminar; doble clic también funciona. Ctrl+Z deshace; Escape cancela.",
   polygon: "Marca 3 vértices. Termina con clic derecho, Enter o Terminar; doble clic también funciona. Ctrl+Z deshace; Escape cancela.",
@@ -234,20 +234,22 @@ export function DrawingToolbar({
           </Button>
         )}
       </div>
-      <div className="drawing-instruction" role="status" aria-live="polite">
-        <span>{instruction}</span>
-        {measurementResult && (
-          <strong className={`measurement-readout ${activeMeasurement && drawingInProgress ? "measurement-readout--provisional" : ""}`}>
-            {activeMeasurement && drawingInProgress ? "Provisional · " : "Medición · "}
-            {measurementResult.kind === "distance" ? formatDistance(measurementResult.value) : formatArea(measurementResult.value)}
-            {measurementResult.kind === "distance" && ` · ${measurementResult.vertices} puntos`}
-            {measurementResult.kind === "area" && ` · ${measurementResult.vertices} vértices`}
-          </strong>
-        )}
-        {measurementResult && !(activeMeasurement && drawingInProgress) && (
-          <span className="measurement-hint">Medición temporal. Pulsa «Borrar medición» para quitarla.</span>
-        )}
-      </div>
+      {(instruction || measurementResult) && (
+        <div className="drawing-instruction" role="status" aria-live="polite">
+          {instruction && <span>{instruction}</span>}
+          {measurementResult && (
+            <strong className={`measurement-readout ${activeMeasurement && drawingInProgress ? "measurement-readout--provisional" : ""}`}>
+              {activeMeasurement && drawingInProgress ? "Provisional · " : "Medición · "}
+              {measurementResult.kind === "distance" ? formatDistance(measurementResult.value) : formatArea(measurementResult.value)}
+              {measurementResult.kind === "distance" && ` · ${measurementResult.vertices} puntos`}
+              {measurementResult.kind === "area" && ` · ${measurementResult.vertices} vértices`}
+            </strong>
+          )}
+          {measurementResult && !(activeMeasurement && drawingInProgress) && (
+            <span className="measurement-hint">Medición temporal. Pulsa «Borrar medición» para quitarla.</span>
+          )}
+        </div>
+      )}
     </>
   );
 }

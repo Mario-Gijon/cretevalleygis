@@ -239,8 +239,6 @@ export default function App() {
               <X size={17} />
             </Button>
           </div>
-          <p className="panel-description">Activa la cartografía que quieres consultar.</p>
-
           <section className="layer-section" aria-labelledby="base-layers-title">
             <h2 className="eyebrow" id="base-layers-title">CAPA BASE</h2>
             <div className="layer-row">

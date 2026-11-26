@@ -234,14 +234,6 @@ button {
   display: none;
 }
 
-.panel-description {
-  max-width: 210px;
-  margin: 9px 0 26px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.55;
-}
-
 .layer-section > .eyebrow {
   margin: 0 0 10px 3px;
 }
@@ -580,7 +572,7 @@ button {
 .map-location-chip {
   position: absolute;
   z-index: 1;
-  top: 68px;
+  top: 13px;
   left: 16px;
   display: flex;
   align-items: center;
@@ -865,28 +857,6 @@ button {
   font-size: 10px !important;
 }
 
-.ol-scale-bar {
-  left: 14px !important;
-  bottom: 54px !important;
-  color: var(--text);
-  font-size: 10px !important;
-}
-
-.ol-scale-bar-inner {
-  border-color: var(--text) !important;
-}
-
-.ol-scale-step-marker {
-  background: var(--text) !important;
-}
-
-.ol-scale-text {
-  border-color: var(--text) !important;
-  background: color-mix(in srgb, var(--surface-raised) 90%, transparent) !important;
-  color: var(--text) !important;
-  text-shadow: none !important;
-}
-
 .ol-attribution ul {
   padding: 3px 7px !important;
 }
@@ -1041,11 +1011,6 @@ button {
 
   .measurement-readout {
     font-size: 10px;
-  }
-
-  .ol-scale-bar {
-    left: 11px !important;
-    bottom: 104px !important;
   }
 
   .map-controls {
