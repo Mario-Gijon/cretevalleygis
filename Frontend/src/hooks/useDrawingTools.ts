@@ -72,6 +72,11 @@ const featureStyle = new Style({
   }),
 });
 
+const terrainFeatureStyle = new Style({
+  fill: new Fill({ color: "rgba(69, 197, 197, 0.035)" }),
+  stroke: new Stroke({ color: "#134F8A", width: 3 }),
+});
+
 const selectedStyle = new Style({
   fill: new Fill({ color: "rgba(69, 197, 197, 0.36)" }),
   stroke: new Stroke({ color: "#05294C", width: 4 }),
@@ -80,6 +85,11 @@ const selectedStyle = new Style({
     fill: new Fill({ color: "#45C5C5" }),
     stroke: new Stroke({ color: "#05294C", width: 2 }),
   }),
+});
+
+const selectedTerrainStyle = new Style({
+  fill: new Fill({ color: "rgba(69, 197, 197, 0.045)" }),
+  stroke: new Stroke({ color: "#05294C", width: 4 }),
 });
 
 const measurementStyle = new Style({
@@ -149,7 +159,11 @@ function isMeasurementTool(tool: MapTool): tool is MeasurementTool {
 
 export function useDrawingTools() {
   const [source] = useState(() => new VectorSource<Feature<Geometry>>({ wrapX: false }));
-  const [layer] = useState(() => new VectorLayer({ source, style: featureStyle, zIndex: 10 }));
+  const [layer] = useState(() => new VectorLayer({
+    source,
+    style: (feature) => feature.get("terrainActive") ? terrainFeatureStyle : featureStyle,
+    zIndex: 10,
+  }));
   const [measurementSource] = useState(() => new VectorSource<Feature<Geometry>>({ wrapX: false }));
   const [measurementLayer] = useState(() => new VectorLayer({
     source: measurementSource,
@@ -175,6 +189,7 @@ export function useDrawingTools() {
   const tracePausedRef = useRef(false);
   const nextIdRef = useRef(1);
   const countsRef = useRef<Record<DrawingGeometry, number>>({ Point: 0, LineString: 0, Polygon: 0 });
+  const terrainFeatureIdRef = useRef<string | null>(null);
 
   const refreshElements = useCallback(() => {
     setElements(
@@ -248,7 +263,12 @@ export function useDrawingTools() {
   const connectMap = useCallback((map: OlMap): MapCleanup => {
     mapRef.current = map;
     const selectedFeatures = new Collection<Feature<Geometry>>();
-    const select = new Select({ features: selectedFeatures, layers: [layer], hitTolerance: 8, style: selectedStyle });
+    const select = new Select({
+      features: selectedFeatures,
+      layers: [layer],
+      hitTolerance: 8,
+      style: (feature) => feature.get("terrainActive") ? selectedTerrainStyle : selectedStyle,
+    });
     const modify = new Modify({ features: selectedFeatures, pixelTolerance: 12 });
     const traceGuard = new Interaction({
       handleEvent: (event) => {
@@ -525,6 +545,16 @@ export function useDrawingTools() {
     refreshSelection();
   }, [refreshElements, refreshSelection, source]);
 
+  const setTerrainFeatureId = useCallback((id: string | null) => {
+    const previousId = terrainFeatureIdRef.current;
+    if (previousId === id) return;
+    if (previousId) source.getFeatureById(previousId)?.set("terrainActive", false);
+
+    const feature = id ? source.getFeatureById(id) : null;
+    terrainFeatureIdRef.current = feature?.getGeometry()?.getType() === "Polygon" ? id : null;
+    feature?.set("terrainActive", terrainFeatureIdRef.current !== null);
+  }, [source]);
+
   return {
     layer,
     measurementLayer,
@@ -550,5 +580,6 @@ export function useDrawingTools() {
     centerElement,
     deleteSelected,
     renameElement,
+    setTerrainFeatureId,
   };
 }

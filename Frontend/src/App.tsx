@@ -21,6 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { fromLonLat, transformExtent } from "ol/proj.js";
+import Polygon from "ol/geom/Polygon.js";
 import type OlMap from "ol/Map.js";
 import MapView, { type BaseMapId, type BaseMapLayers, type MapStatus, type QgisStatus } from "@/components/MapView";
 import { DrawnElementsList } from "@/components/DrawnElementsList";
@@ -93,6 +94,7 @@ export default function App() {
   const [activePreparedTerrain, setActivePreparedTerrain] = useState<{
     elementId: string;
     result: TerrainPreparationResult;
+    geometryRevision: number;
   } | null>(null);
   const activePreparedTerrainRef = useRef<typeof activePreparedTerrain>(null);
   const previousTopographicVisibilityRef = useRef<TopographicVisibility | null>(null);
@@ -166,18 +168,23 @@ export default function App() {
   };
 
   const activatePreparedTerrain = useCallback((elementId: string, result: TerrainPreparationResult) => {
+    const feature = drawingTools.layer.getSource()?.getFeatureById(elementId);
+    const geometry = feature?.getGeometry();
+    if (!(geometry instanceof Polygon)) return;
     if (!activePreparedTerrainRef.current) {
       previousTopographicVisibilityRef.current = topographicVisibilityRef.current;
     }
-    const active = { elementId, result };
+    drawingTools.setTerrainFeatureId(elementId);
+    const active = { elementId, result, geometryRevision: geometry.getRevision() };
     activePreparedTerrainRef.current = active;
     setActivePreparedTerrain(active);
     const visible = { hillshade: true, elevation: true };
     topographicVisibilityRef.current = visible;
     setTopographicVisibility(visible);
-  }, []);
+  }, [drawingTools.layer, drawingTools.setTerrainFeatureId]);
 
   const closePreparedTerrain = useCallback(() => {
+    drawingTools.setTerrainFeatureId(null);
     activePreparedTerrainRef.current = null;
     setActivePreparedTerrain(null);
     const previous = previousTopographicVisibilityRef.current;
@@ -186,7 +193,7 @@ export default function App() {
       topographicVisibilityRef.current = previous;
       setTopographicVisibility(previous);
     }
-  }, []);
+  }, [drawingTools.setTerrainFeatureId]);
 
   const centerPreparedTerrain = useCallback(() => {
     const active = activePreparedTerrainRef.current;
@@ -236,6 +243,19 @@ export default function App() {
     ? { state: "error", message: "El área cambió después de preparar estos datos. Vuelve a preparar el terreno." }
     : selectedTerrainJob;
   const selectedTerrainIsActive = Boolean(activePreparedTerrain && activePreparedTerrain.elementId === selectedElement?.id);
+  const activeTerrainFeature = activePreparedTerrain
+    ? drawingTools.layer.getSource()?.getFeatureById(activePreparedTerrain.elementId)
+    : null;
+  const activeTerrainGeometry = activeTerrainFeature?.getGeometry();
+  const activeTerrainClipGeometry = activeTerrainGeometry instanceof Polygon ? activeTerrainGeometry : null;
+
+  useEffect(() => {
+    if (!activePreparedTerrain) return;
+    if (
+      !activeTerrainClipGeometry
+      || activeTerrainClipGeometry.getRevision() !== activePreparedTerrain.geometryRevision
+    ) closePreparedTerrain();
+  }, [activePreparedTerrain, activeTerrainClipGeometry, closePreparedTerrain, drawingTools.elements]);
 
   useEffect(() => {
     const layers = baseLayersRef.current?.topography;
@@ -262,7 +282,7 @@ export default function App() {
       const layer = layers[id];
       const source = layer.getSource();
       if (!source) return;
-      if (activePreparedTerrain) {
+      if (activePreparedTerrain && activeTerrainClipGeometry) {
         source.updateParams({
           MAP: activePreparedTerrain.result.cartography.map_parameter,
           LAYERS: activePreparedTerrain.result.cartography.layers[id],
@@ -273,7 +293,7 @@ export default function App() {
         layer.setVisible(false);
       }
     });
-  }, [activePreparedTerrain, topographicOpacity, topographicVisibility]);
+  }, [activePreparedTerrain, activeTerrainClipGeometry, topographicOpacity, topographicVisibility]);
 
   useEffect(() => {
     const selected = drawingTools.selectedElementInfo;
@@ -616,15 +636,15 @@ export default function App() {
             ) && (
               <div className="elevation-legend" aria-label="Leyenda de elevación en metros">
                 <span className="elevation-legend-title">
-                  {activePreparedTerrain ? "Elevación · metros" : "Elevación · altura y profundidad (m)"}
+                  {activePreparedTerrain ? "Elevación · escala fija (m)" : "Elevación · altura y profundidad (m)"}
                 </span>
                 <div className="elevation-legend-gradient" aria-hidden="true" />
                 <div className="elevation-legend-values">
                   {activePreparedTerrain ? (
                     <>
-                      <span>{Math.round(activePreparedTerrain.result.coverage.elevation_min_m)} m</span>
-                      <span>{Math.round((activePreparedTerrain.result.coverage.elevation_min_m + activePreparedTerrain.result.coverage.elevation_max_m) / 2)} m</span>
-                      <span>{Math.round(activePreparedTerrain.result.coverage.elevation_max_m)} m</span>
+                      <span>−11.000 m</span>
+                      <span>0 m</span>
+                      <span>9.000 m</span>
                     </>
                   ) : (
                     <>
@@ -715,6 +735,7 @@ export default function App() {
             baseLayersRef={baseLayersRef}
             drawingsLayer={drawingTools.layer}
             measurementsLayer={drawingTools.measurementLayer}
+            terrainClipGeometry={activeTerrainClipGeometry}
             onStatusChange={handleMapStatus}
             onQgisStatusChange={handleQgisStatusChange}
             onOverlayAvailabilityChange={handleOverlayAvailabilityChange}

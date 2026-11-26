@@ -656,7 +656,7 @@ button {
   height: 10px;
   border: 1px solid rgb(5 41 76 / 13%);
   border-radius: 5px;
-  background: linear-gradient(90deg, #092e53 0%, #145d8b 15%, #3d91af 35%, #8dc4ca 45%, #e2e9d4 55%, #b6cb8a 61%, #78a568 67%, #c6b47a 72.5%, #a77a5a 79%, #d0c9bd 85%, #f5f3ea 100%);
+  background: linear-gradient(90deg, #092e53 0%, #145d8b 15%, #3d91af 35%, #8dc4ca 45%, #e2e9d4 55%, #b6cb8a 57.5%, #78a568 62.5%, #c6b47a 67.5%, #a77a5a 75%, #d0c9bd 85%, #f5f3ea 100%);
 }
 
 .elevation-legend-values {

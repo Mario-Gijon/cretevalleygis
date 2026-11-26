@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type Feature from "ol/Feature.js";
+import Feature from "ol/Feature.js";
 import type Map from "ol/Map.js";
 import Attribution from "ol/control/Attribution.js";
 import { defaults as defaultControls } from "ol/control/defaults.js";
@@ -12,6 +12,11 @@ import type Geometry from "ol/geom/Geometry.js";
 import TileLayer from "ol/layer/Tile.js";
 import ImageLayer from "ol/layer/Image.js";
 import type VectorSource from "ol/source/Vector.js";
+import type Polygon from "ol/geom/Polygon.js";
+import { getVectorContext } from "ol/render.js";
+import type RenderEvent from "ol/render/Event.js";
+import Fill from "ol/style/Fill.js";
+import Style from "ol/style/Style.js";
 import View from "ol/View.js";
 import {
   BASE_MAP_WMS_LAYERS,
@@ -50,6 +55,7 @@ type MapViewProps = {
   baseLayersRef: MutableRef<BaseMapLayers | null>;
   drawingsLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
   measurementsLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
+  terrainClipGeometry: Polygon | null;
   onStatusChange: (status: MapStatus) => void;
   onQgisStatusChange: (status: QgisStatus) => void;
   onOverlayAvailabilityChange: (id: GeographicOverlayId, available: boolean) => void;
@@ -67,6 +73,7 @@ export default function MapView({
   baseLayersRef,
   drawingsLayer,
   measurementsLayer,
+  terrainClipGeometry,
   onStatusChange,
   onQgisStatusChange,
   onOverlayAvailabilityChange,
@@ -165,6 +172,7 @@ export default function MapView({
       Object.entries(regionalTerrainSources).map(([id, source]) => {
         const layerId = id as TopographicLayerId;
         return [layerId, new ImageLayer({
+          className: `regional-terrain-${layerId}`,
           source,
           visible: false,
           opacity: DEFAULT_TOPOGRAPHIC_OPACITY[layerId] / 100,
@@ -368,6 +376,36 @@ export default function MapView({
       baseLayersRef.current = null;
     };
   }, [baseLayersRef, drawingsLayer, mapRef, measurementsLayer, onCenterChange, onMapReady, onOverlayAvailabilityChange, onQgisStatusChange, onStatusChange, onTopographicAvailabilityChange]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const layers = baseLayersRef.current?.regionalTopography;
+    if (!map || !layers || !terrainClipGeometry) return;
+
+    const maskFeature = new Feature({ geometry: terrainClipGeometry });
+    const maskStyle = new Style({ fill: new Fill({ color: "#ffffff" }) });
+    const clipLayer = (event: RenderEvent) => {
+      const context = event.context as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | undefined;
+      if (!context || !("globalCompositeOperation" in context)) return;
+      context.save();
+      context.globalCompositeOperation = "destination-in";
+      getVectorContext(event).drawFeature(maskFeature, maskStyle);
+      context.restore();
+    };
+
+    layers.elevation.on("postrender", clipLayer);
+    layers.hillshade.on("postrender", clipLayer);
+    const geometryChanged = () => map.render();
+    terrainClipGeometry.on("change", geometryChanged);
+    map.render();
+
+    return () => {
+      layers.elevation.un("postrender", clipLayer);
+      layers.hillshade.un("postrender", clipLayer);
+      terrainClipGeometry.un("change", geometryChanged);
+      map.render();
+    };
+  }, [baseLayersRef, mapRef, terrainClipGeometry]);
 
   return (
     <div
