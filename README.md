@@ -89,3 +89,25 @@ Natural Earth publica los datos en dominio público; la atribución es opcional 
 ## Licencias
 
 QWC2 conserva su licencia BSD-2-Clause y atribuciones originales en [`upstream/qwc2/LICENSE`](upstream/qwc2/LICENSE). QGIS Server conserva los avisos de licencia de su imagen oficial. Consulta [TERCEROS.md](TERCEROS.md) para las licencias y fuentes de software y datos.
+
+## Backend local y preparación bajo demanda
+
+El backend FastAPI se ejecuta en `http://localhost:7200`, enlazado solo a loopback. Usa la misma imagen fijada de QGIS Server 3.44.16 para llamar a `QGIS/scripts/prepare-terrain.py`; no duplica la descarga Copernicus ni el procesamiento GDAL. Las teselas originales y los derivados siguen en el volumen Docker persistente `qgis_world_data`. Cada extensión y nombre normalizados generan un proyecto independiente en `/io/data/terrain/regions/<id>/terrain.qgs`; `world.qgs` y las regiones anteriores se conservan.
+
+Endpoints:
+
+- `GET /health`: estado del servicio y acceso al volumen.
+- `POST /api/terrain/jobs`: acepta `{"area_name":"Jaén","bbox_wgs84":[-3.8,37.7,-3.5,37.9]}` y devuelve `202` con el identificador y las rutas de consulta.
+- `GET /api/terrain/jobs/{job_id}`: estado `queued`, `running`, `completed` o `failed`.
+- `GET /api/terrain/jobs/{job_id}/result`: cobertura WGS84, resolución, rango de elevación, archivos y referencias WMS (`terrain_hillshade` y `terrain_elevation`) con el parámetro `MAP` del proyecto regional.
+
+Las peticiones comparten la validación del script: extensión WGS84 creciente, máximo 2° por lado y no más de cuatro teselas Copernicus. Solo se ejecuta un trabajo a la vez; otra región mientras haya un trabajo activo recibe `409`. Una solicitud equivalente devuelve el resultado guardado con `reused: true`; la preparación también reutiliza teselas y rásteres verificados.
+
+Arranque y parada del backend:
+
+```bash
+docker compose up -d --build backend
+docker compose stop backend
+```
+
+El estado de trabajos en curso vive en memoria y se pierde si se reinicia el backend. Los trabajos completados se reconstruyen desde sus resultados persistidos en el volumen y siguen disponibles por identificador. Es una cola de un único proceso para desarrollo local, no un servicio de procesamiento distribuido.

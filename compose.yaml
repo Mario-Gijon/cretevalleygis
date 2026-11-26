@@ -49,6 +49,38 @@ services:
     mem_limit: 1g
     restart: unless-stopped
 
+  backend:
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:7200:7200"
+    environment:
+      QGIS_PREFIX_PATH: /usr
+      QT_QPA_PLATFORM: offscreen
+      TERRAIN_REGION_ROOT: /io/data/terrain/regions
+      TERRAIN_SCRIPT_PATH: /io/scripts/prepare-terrain.py
+      PUBLIC_QGIS_WMS_URL: http://localhost:8085/ogc/world
+    volumes:
+      - ./QGIS/scripts:/io/scripts:ro
+      - qgis_world_data:/io/data
+    depends_on:
+      qgis-server:
+        condition: service_started
+    cpus: "1.0"
+    mem_limit: 768m
+    healthcheck:
+      test:
+        - CMD
+        - /opt/backend-venv/bin/python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7200/health', timeout=2)"
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
 volumes:
   frontend_node_modules:
   qgis_world_data:

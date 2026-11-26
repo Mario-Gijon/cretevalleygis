@@ -23,11 +23,13 @@ from osgeo import gdal
 from qgis.core import (
     Qgis,
     QgsApplication,
+    QgsCoordinateReferenceSystem,
     QgsProject,
     QgsRasterLayer,
 )
 from terrain_style import style_elevation as apply_shared_elevation_style
 from terrain_style import style_hillshade as apply_shared_hillshade_style
+from terrain_request import parse_bbox_text, selected_tiles
 
 
 DATA_ROOT = Path("/io/data/terrain")
@@ -36,12 +38,12 @@ SOURCE_TILES = SOURCE_ROOT / "tiles"
 DERIVED_ROOT = DATA_ROOT / "derived"
 SOURCE_MANIFEST = DATA_ROOT / "source-manifest.json"
 DERIVED_MANIFEST = DATA_ROOT / "derived-manifest.json"
-PROJECT_PATH = Path("/io/data/world/world.qgs")
+WORLD_PROJECT_PATH = Path("/io/data/world/world.qgs")
+PROJECT_PATH = Path(os.environ.get("TERRAIN_PROJECT_PATH", WORLD_PROJECT_PATH))
 NATURAL_EARTH_DATA = Path("/io/data/world/data")
 S3_ROOT = "https://copernicus-dem-30m.s3.amazonaws.com"
 PRODUCT = "Copernicus DEM GLO-30 Public"
 SOURCE_NODATA = -9999.0
-MAX_TILES_PER_RUN = 4
 RASTER_CREATION_OPTIONS = ["TILED=YES", "COMPRESS=DEFLATE", "PREDICTOR=3", "BIGTIFF=IF_SAFER"]
 HILLSHADE_CREATION_OPTIONS = ["TILED=YES", "COMPRESS=DEFLATE", "PREDICTOR=2", "BIGTIFF=IF_SAFER"]
 
@@ -75,17 +77,9 @@ def write_manifest(path: Path, manifest: dict) -> None:
 
 def parse_bbox(value: str) -> tuple[float, float, float, float]:
     try:
-        bbox = tuple(float(part.strip()) for part in value.split(","))
+        return parse_bbox_text(value)
     except ValueError as error:
-        raise argparse.ArgumentTypeError("bbox must be west,south,east,north") from error
-    if len(bbox) != 4:
-        raise argparse.ArgumentTypeError("bbox must be west,south,east,north")
-    west, south, east, north = bbox
-    if not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
-        raise argparse.ArgumentTypeError("bbox must be an increasing WGS84 longitude/latitude extent")
-    if east - west > 2 or north - south > 2:
-        raise argparse.ArgumentTypeError("terrain preparation is limited to small areas (max 2° × 2°)")
-    return bbox  # type: ignore[return-value]
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def arguments() -> argparse.Namespace:
@@ -100,6 +94,11 @@ def arguments() -> argparse.Namespace:
         default=os.environ.get("TERRAIN_AREA_NAME", "Terrain area"),
         help="human-readable name for this terrain coverage",
     )
+    parser.add_argument(
+        "--project-path",
+        default=os.environ.get("TERRAIN_PROJECT_PATH", str(WORLD_PROJECT_PATH)),
+        help="QGIS project to update (use a separate path to keep the world project unchanged)",
+    )
     args = parser.parse_args()
     if not args.bbox:
         parser.error("--bbox or TERRAIN_BBOX is required")
@@ -107,23 +106,10 @@ def arguments() -> argparse.Namespace:
     args.name = args.name.strip()
     if not args.name:
         parser.error("--name cannot be empty")
+    args.project_path = Path(args.project_path)
+    if not args.project_path.is_absolute():
+        parser.error("--project-path must be absolute")
     return args
-
-
-def tile_stem(longitude: int, latitude: int) -> str:
-    northing = f"{'N' if latitude >= 0 else 'S'}{abs(latitude):02d}_00"
-    easting = f"{'E' if longitude >= 0 else 'W'}{abs(longitude):03d}_00"
-    return f"Copernicus_DSM_COG_10_{northing}_{easting}_DEM"
-
-
-def selected_tiles(bbox: tuple[float, float, float, float]) -> list[str]:
-    west, south, east, north = bbox
-    first_x, last_x = math.floor(west), math.ceil(east) - 1
-    first_y, last_y = math.floor(south), math.ceil(north) - 1
-    stems = [tile_stem(x, y) for y in range(first_y, last_y + 1) for x in range(first_x, last_x + 1)]
-    if not stems or len(stems) > MAX_TILES_PER_RUN:
-        raise ValueError(f"Area selects {len(stems)} tiles; the safety limit is {MAX_TILES_PER_RUN}")
-    return stems
 
 
 def validate_cog(path: Path) -> tuple[float | None, list[int]]:
@@ -504,8 +490,13 @@ def set_raster_metadata(layer: QgsRasterLayer, title: str, abstract: str) -> Non
 
 def add_terrain_to_project(elevation_path: Path, hillshade_path: Path, record: dict) -> None:
     project = QgsProject.instance()
-    if not project.read(str(PROJECT_PATH)):
-        raise RuntimeError(f"Could not open the existing QGIS project: {PROJECT_PATH}")
+    PROJECT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if PROJECT_PATH.exists():
+        if not project.read(str(PROJECT_PATH)):
+            raise RuntimeError(f"Could not open the existing QGIS project: {PROJECT_PATH}")
+    else:
+        project.clear()
+        project.setCrs(QgsCoordinateReferenceSystem("EPSG:3857"))
     project.setFilePathStorage(Qgis.FilePathType.Relative)
     for name in ("terrain_hillshade", "terrain_elevation"):
         for layer in project.mapLayersByName(name):
@@ -534,34 +525,32 @@ def add_terrain_to_project(elevation_path: Path, hillshade_path: Path, record: d
     project.addMapLayer(elevation)
     project.addMapLayer(hillshade)
 
-    temp_project = PROJECT_PATH.parent / "world.with-terrain.next.qgs"
+    temp_project = PROJECT_PATH.parent / f"{PROJECT_PATH.stem}.next{PROJECT_PATH.suffix}"
     project.setFileName(str(temp_project))
     if not project.write():
         raise RuntimeError(f"Could not write the QGIS project with terrain layers: {temp_project}")
     os.replace(temp_project, PROJECT_PATH)
 
 
-def make_terrain_readable() -> None:
-    # QGIS Server reads the shared volume as www-data; only normalize this
-    # milestone's files so existing Natural Earth data keeps its permissions.
-    directories = {DATA_ROOT, SOURCE_ROOT, SOURCE_TILES, DERIVED_ROOT}
-    files = {SOURCE_MANIFEST, DERIVED_MANIFEST, PROJECT_PATH}
-    for path in DERIVED_ROOT.rglob("*") if DERIVED_ROOT.exists() else ():
-        if path.is_dir():
-            directories.add(path)
-        else:
-            files.add(path)
-    files.update(SOURCE_TILES.glob("*.tif") if SOURCE_TILES.exists() else ())
-    for directory in directories:
-        if directory.exists():
-            directory.chmod(0o755)
-    for path in files:
+def make_terrain_readable(paths: tuple[Path, ...]) -> None:
+    # QGIS Server reads the shared volume as www-data. Only normalize this
+    # request's project and raster paths; don't rewrite permissions on other areas.
+    for path in paths:
         if path.is_file():
             path.chmod(0o644)
+        directory = path.parent
+        while directory == DATA_ROOT or DATA_ROOT in directory.parents:
+            if directory.exists():
+                directory.chmod(0o755)
+            if directory == DATA_ROOT:
+                break
+            directory = directory.parent
 
 
 def main() -> None:
+    global PROJECT_PATH
     args = arguments()
+    PROJECT_PATH = args.project_path
     bbox = args.bbox
     stems = selected_tiles(bbox)
     source_manifest = read_manifest(SOURCE_MANIFEST)
@@ -590,7 +579,7 @@ def main() -> None:
     finally:
         app.exitQgis()
 
-    make_terrain_readable()
+    make_terrain_readable((PROJECT_PATH, elevation_path, hillshade_path))
     source_bytes = sum(path.stat().st_size for path in SOURCE_TILES.glob("*.tif"))
     derived_bytes = sum(path.stat().st_size for path in DERIVED_ROOT.rglob("*.tif"))
     print(f"Prepared Copernicus terrain coverage '{args.name}' at {bbox}.", flush=True)
@@ -598,6 +587,23 @@ def main() -> None:
     print(f"Original COG storage: {source_bytes} bytes; derived raster storage: {derived_bytes} bytes.", flush=True)
     print(f"Elevation range: {record['elevation_min_m']:.1f}–{record['elevation_max_m']:.1f} m; CRS {record['crs']}; NoData {SOURCE_NODATA:g}.", flush=True)
     print("QGIS WMS layers: terrain_hillshade, terrain_elevation.", flush=True)
+    result = {
+        "area_name": args.name,
+        "bbox_wgs84": list(bbox),
+        "elevation_min_m": record["elevation_min_m"],
+        "elevation_max_m": record["elevation_max_m"],
+        "crs": record["crs"],
+        "vertical_datum": record.get("vertical_datum", "EGM2008"),
+        "resolution_m": 30,
+        "nodata": SOURCE_NODATA,
+        "project_path": str(PROJECT_PATH),
+        "elevation_path": str(elevation_path),
+        "hillshade_path": str(hillshade_path),
+        "source_tile_count": len(stems),
+        "source_downloaded_bytes": downloaded_bytes,
+        "source_tiles": [{"name": path.name, "sha256": digest} for path, digest in sources],
+    }
+    print(f"RESULT_JSON={json.dumps(result, separators=(',', ':'))}", flush=True)
 
 
 if __name__ == "__main__":
