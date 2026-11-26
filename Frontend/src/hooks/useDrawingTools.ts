@@ -13,6 +13,7 @@ import type OlMap from "ol/Map.js";
 import MapBrowserEventType from "ol/MapBrowserEventType.js";
 import VectorLayer from "ol/layer/Vector.js";
 import VectorSource from "ol/source/Vector.js";
+import { transformExtent } from "ol/proj.js";
 import { unByKey } from "ol/Observable.js";
 import { noModifierKeys, primaryAction } from "ol/events/condition.js";
 import type { EventsKey } from "ol/events.js";
@@ -37,6 +38,7 @@ export type SelectedElementInfo = {
   id: string;
   name: string;
   geometry: GeometryInfo;
+  bboxWgs84?: [number, number, number, number];
 } | null;
 
 type DrawInteractions = Partial<Record<Extract<DrawingTool, "point" | "line" | "polygon">, Draw>>;
@@ -200,9 +202,17 @@ export function useDrawingTools() {
     const geometry = feature.getGeometry();
     const projection = mapRef.current?.getView().getProjection();
     const geometryInfo = geometry && projection ? getGeometryInfo(geometry, projection) : null;
+    const bboxWgs84 = geometry instanceof Polygon && projection
+      ? transformExtent(geometry.getExtent(), projection, "EPSG:4326", 8) as [number, number, number, number]
+      : undefined;
     setSelectedElementInfo(
       geometryInfo
-        ? { id: String(feature.getId() ?? ""), name: String(feature.get("name") ?? "Elemento"), geometry: geometryInfo }
+        ? {
+            id: String(feature.getId() ?? ""),
+            name: String(feature.get("name") ?? "Elemento"),
+            geometry: geometryInfo,
+            ...(bboxWgs84 ? { bboxWgs84 } : {}),
+          }
         : null,
     );
   }, []);

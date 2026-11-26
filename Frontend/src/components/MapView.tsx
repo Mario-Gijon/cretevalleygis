@@ -41,6 +41,7 @@ export type BaseMapLayers = {
   qgis: ImageLayer<ImageWMS>;
   overlays: OverlayLayers;
   topography: TopographicLayers;
+  regionalTopography: TopographicLayers;
 };
 export type QgisStatus = "idle" | "loading" | "available" | "error";
 
@@ -146,6 +147,30 @@ export default function MapView({
         })];
       }),
     ) as TopographicLayers;
+    const regionalTerrainSources = Object.fromEntries(
+      Object.keys(TOPOGRAPHIC_LAYERS).map((id) => [
+        id,
+        new ImageWMS({
+          url: "/qgis/ogc/world",
+          params: {
+            VERSION: "1.3.0",
+            FORMAT: "image/png",
+            TRANSPARENT: true,
+          },
+          serverType: "qgis",
+        }),
+      ]),
+    ) as Record<TopographicLayerId, ImageWMS>;
+    const regionalTopographicLayers = Object.fromEntries(
+      Object.entries(regionalTerrainSources).map(([id, source]) => {
+        const layerId = id as TopographicLayerId;
+        return [layerId, new ImageLayer({
+          source,
+          visible: false,
+          opacity: DEFAULT_TOPOGRAPHIC_OPACITY[layerId] / 100,
+        })];
+      }),
+    ) as TopographicLayers;
     const map = new OlMap({
       target: targetRef.current,
       layers: [
@@ -153,6 +178,8 @@ export default function MapView({
         qgisLayer,
         topographicLayers.elevation,
         topographicLayers.hillshade,
+        regionalTopographicLayers.elevation,
+        regionalTopographicLayers.hillshade,
         overlayLayers.boundaries,
         overlayLayers.localities,
         overlayLayers.rivers,
@@ -249,9 +276,18 @@ export default function MapView({
       layer.on("change:visible", onVisibilityChange);
       return { id: overlayId, source, layer, onTileLoad, onTileError, onVisibilityChange };
     });
-    const topographicListeners = Object.entries(topographicSources).map(([id, source]) => {
-      const layerId = id as TopographicLayerId;
-      const layer = topographicLayers[layerId];
+    const topographicListeners = [
+      ...Object.entries(topographicSources).map(([id, source]) => ({
+        id: id as TopographicLayerId,
+        source,
+        layer: topographicLayers[id as TopographicLayerId],
+      })),
+      ...Object.entries(regionalTerrainSources).map(([id, source]) => ({
+        id: id as TopographicLayerId,
+        source,
+        layer: regionalTopographicLayers[id as TopographicLayerId],
+      })),
+    ].map(({ id: layerId, source, layer }) => {
       const onLoad = () => onTopographicAvailabilityChange(layerId, true);
       const onError = () => {
         if (layer.getVisible()) onTopographicAvailabilityChange(layerId, false);
@@ -282,7 +318,13 @@ export default function MapView({
     });
     map.once("rendercomplete", firstRender);
     mapRef.current = map;
-    baseLayersRef.current = { osm: osmLayer, qgis: qgisLayer, overlays: overlayLayers, topography: topographicLayers };
+    baseLayersRef.current = {
+      osm: osmLayer,
+      qgis: qgisLayer,
+      overlays: overlayLayers,
+      topography: topographicLayers,
+      regionalTopography: regionalTopographicLayers,
+    };
     const updateCenter = () => {
       const center = map.getView().getCenter();
       if (!center) return;

@@ -23,6 +23,10 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/qgis/, ""),
       },
+      "/api": {
+        target: process.env.GIS_API_PROXY_TARGET ?? "http://127.0.0.1:7200",
+        changeOrigin: true,
+      },
     },
   },
 });

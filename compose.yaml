@@ -16,6 +16,7 @@ services:
       - "127.0.0.1:5177:5177"
     environment:
       QGIS_SERVER_PROXY_TARGET: http://qgis-server
+      GIS_API_PROXY_TARGET: http://backend:7200
     volumes:
       - ./Frontend:/app
       - frontend_node_modules:/app/node_modules

@@ -314,6 +314,78 @@ button {
   line-height: 1.45;
 }
 
+.terrain-preparation-card {
+  display: grid;
+  gap: 8px;
+  margin-top: 13px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-raised);
+}
+
+.terrain-preparation-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.terrain-preparation-heading h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.terrain-preparation-heading p,
+.terrain-preparation-help {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.terrain-preparation-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.terrain-preparation-status svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.terrain-preparation-status--ready {
+  color: #276b55;
+}
+
+.terrain-preparation-status--error {
+  color: #a8433d;
+}
+
+.app-shell[data-theme="dark"] .terrain-preparation-status--ready {
+  color: #9dd7bb;
+}
+
+.app-shell[data-theme="dark"] .terrain-preparation-status--error {
+  color: #ffc2bd;
+}
+
+.terrain-preparation-button {
+  width: 100%;
+  justify-content: center;
+}
+
+.terrain-preparation-actions {
+  display: grid;
+  gap: 6px;
+}
+
 .drawn-elements-heading {
   display: flex;
   align-items: center;
@@ -472,6 +544,46 @@ button {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.active-terrain-card {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--cv-teal) 40%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--cv-teal) 8%, var(--surface-raised));
+}
+
+.active-terrain-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.active-terrain-copy .eyebrow {
+  margin: 0;
+  color: var(--cv-blue);
+  font-size: 8px;
+}
+
+.active-terrain-copy strong {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.active-terrain-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.app-shell[data-theme="dark"] .active-terrain-copy .eyebrow {
+  color: #83d7d3;
 }
 
 .topographic-layer-card {

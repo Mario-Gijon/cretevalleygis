@@ -20,7 +20,7 @@ import {
   Waves,
   X,
 } from "lucide-react";
-import { fromLonLat } from "ol/proj.js";
+import { fromLonLat, transformExtent } from "ol/proj.js";
 import type OlMap from "ol/Map.js";
 import MapView, { type BaseMapId, type BaseMapLayers, type MapStatus, type QgisStatus } from "@/components/MapView";
 import { DrawnElementsList } from "@/components/DrawnElementsList";
@@ -29,6 +29,7 @@ import { DrawingToolbar } from "@/components/DrawingToolbar";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useDrawingTools } from "@/hooks/useDrawingTools";
+import { useTerrainPreparation } from "@/hooks/useTerrainPreparation";
 import { CRETE_CENTER } from "@/lib/map-config";
 import { formatCoordinate } from "@/lib/geometry-metrics";
 import {
@@ -51,6 +52,7 @@ import {
   type TopographicOpacity,
   type TopographicVisibility,
 } from "@/lib/topographic-layers";
+import type { TerrainPreparationResult, TerrainPreparationView } from "@/lib/terrain-preparation";
 
 type ThemeMode = "light" | "dark";
 
@@ -68,6 +70,7 @@ export default function App() {
   const mapRef = useRef<OlMap | null>(null);
   const baseLayersRef = useRef<BaseMapLayers | null>(null);
   const drawingTools = useDrawingTools();
+  const terrainJobs = useTerrainPreparation();
   const [theme, setTheme] = useState<ThemeMode>(initialTheme);
   const [panelOpen, setPanelOpen] = useState(
     () => !window.matchMedia("(max-width: 720px)").matches,
@@ -87,6 +90,14 @@ export default function App() {
     elevation: true,
   });
   const [terrainCoverage, setTerrainCoverage] = useState<TerrainCoverage | null>(null);
+  const [activePreparedTerrain, setActivePreparedTerrain] = useState<{
+    elementId: string;
+    result: TerrainPreparationResult;
+  } | null>(null);
+  const activePreparedTerrainRef = useRef<typeof activePreparedTerrain>(null);
+  const previousTopographicVisibilityRef = useRef<TopographicVisibility | null>(null);
+  const topographicVisibilityRef = useRef(topographicVisibility);
+  const displayedTerrainJobsRef = useRef(new Set<string>());
   const [terrainServiceState, setTerrainServiceState] = useState<"loading" | "available" | "unavailable">("loading");
   const [mapExtent, setMapExtent] = useState<[number, number, number, number] | null>(null);
   const [mapResolution, setMapResolution] = useState<number | null>(null);
@@ -97,6 +108,9 @@ export default function App() {
     error: false,
   });
   const [mapCenter, setMapCenter] = useState<[number, number]>([...CRETE_CENTER]);
+
+  activePreparedTerrainRef.current = activePreparedTerrain;
+  topographicVisibilityRef.current = topographicVisibility;
 
   const handleMapStatus = useCallback((status: MapStatus) => {
     setMapStatus(status);
@@ -151,6 +165,51 @@ export default function App() {
     setTopographicOpacity((current) => ({ ...current, [id]: opacity }));
   };
 
+  const activatePreparedTerrain = useCallback((elementId: string, result: TerrainPreparationResult) => {
+    if (!activePreparedTerrainRef.current) {
+      previousTopographicVisibilityRef.current = topographicVisibilityRef.current;
+    }
+    const active = { elementId, result };
+    activePreparedTerrainRef.current = active;
+    setActivePreparedTerrain(active);
+    const visible = { hillshade: true, elevation: true };
+    topographicVisibilityRef.current = visible;
+    setTopographicVisibility(visible);
+  }, []);
+
+  const closePreparedTerrain = useCallback(() => {
+    activePreparedTerrainRef.current = null;
+    setActivePreparedTerrain(null);
+    const previous = previousTopographicVisibilityRef.current;
+    previousTopographicVisibilityRef.current = null;
+    if (previous) {
+      topographicVisibilityRef.current = previous;
+      setTopographicVisibility(previous);
+    }
+  }, []);
+
+  const centerPreparedTerrain = useCallback(() => {
+    const active = activePreparedTerrainRef.current;
+    const view = mapRef.current?.getView();
+    if (!active || !view) return;
+    const extent = transformExtent(
+      active.result.coverage.extent_wgs84,
+      "EPSG:4326",
+      view.getProjection(),
+      8,
+    );
+    view.fit(extent, { duration: 420, maxZoom: 13, padding: [84, 42, 84, 42] });
+  }, []);
+
+  const handlePrepareTerrain = useCallback((elementId: string, areaName: string, bbox: [number, number, number, number]) => {
+    void terrainJobs.prepareTerrain(elementId, areaName, bbox);
+  }, [terrainJobs.prepareTerrain]);
+
+  const showPreparedTerrain = useCallback((elementId: string) => {
+    const job = terrainJobs.jobs[elementId];
+    if (job?.state === "completed" && job.result) activatePreparedTerrain(elementId, job.result);
+  }, [activatePreparedTerrain, terrainJobs.jobs]);
+
   const handleOverlayAvailabilityChange = useCallback((id: GeographicOverlayId, available: boolean) => {
     setOverlayAvailability((current) => current[id] === available ? current : { ...current, [id]: available });
   }, []);
@@ -166,6 +225,17 @@ export default function App() {
   const detailedCoverageRatio = getTerrainCoverageRatio(mapExtent, terrainCoverage);
   const hasDetailedCoverageForView = detailedCoverageRatio >= TERRAIN_VISIBILITY_THRESHOLDS.detailedMinViewCoverageRatio;
   const hasTopographicPreference = topographicVisibility.hillshade || topographicVisibility.elevation;
+  const selectedElement = drawingTools.selectedElementInfo;
+  const selectedTerrainJob = selectedElement ? terrainJobs.jobs[selectedElement.id] : undefined;
+  const selectedTerrainMatches = Boolean(
+    selectedElement?.bboxWgs84 && selectedTerrainJob?.result && selectedElement.bboxWgs84.every((coordinate, index) => (
+      Math.abs(coordinate - selectedTerrainJob.result!.coverage.extent_wgs84[index]) < 1e-7
+    )),
+  );
+  const selectedTerrainPreparation: TerrainPreparationView | undefined = selectedTerrainJob?.state === "completed" && !selectedTerrainMatches
+    ? { state: "error", message: "El área cambió después de preparar estos datos. Vuelve a preparar el terreno." }
+    : selectedTerrainJob;
+  const selectedTerrainIsActive = Boolean(activePreparedTerrain && activePreparedTerrain.elementId === selectedElement?.id);
 
   useEffect(() => {
     const layers = baseLayersRef.current?.topography;
@@ -175,7 +245,7 @@ export default function App() {
       const layer = layers[id];
       const source = layer.getSource();
       if (!source) return;
-      const shouldRender = terrainServiceState === "available" && topographicVisibility[id] && terrainRenderMode !== "hidden";
+      const shouldRender = !activePreparedTerrain && terrainServiceState === "available" && topographicVisibility[id] && terrainRenderMode !== "hidden";
       if (shouldRender) {
         const names = TOPOGRAPHIC_LAYERS[id];
         const requestedLayer = terrainRenderMode === "detailed" ? names.wmsLayer : names.globalWmsLayer;
@@ -183,7 +253,41 @@ export default function App() {
       }
       if (layer.getVisible() !== shouldRender) layer.setVisible(shouldRender);
     });
-  }, [terrainRenderMode, terrainServiceState, topographicVisibility]);
+  }, [activePreparedTerrain, terrainRenderMode, terrainServiceState, topographicVisibility]);
+
+  useEffect(() => {
+    const layers = baseLayersRef.current?.regionalTopography;
+    if (!layers) return;
+    (Object.keys(TOPOGRAPHIC_LAYERS) as TopographicLayerId[]).forEach((id) => {
+      const layer = layers[id];
+      const source = layer.getSource();
+      if (!source) return;
+      if (activePreparedTerrain) {
+        source.updateParams({
+          MAP: activePreparedTerrain.result.cartography.map_parameter,
+          LAYERS: activePreparedTerrain.result.cartography.layers[id],
+        });
+        layer.setOpacity(topographicOpacity[id] / 100);
+        if (layer.getVisible() !== topographicVisibility[id]) layer.setVisible(topographicVisibility[id]);
+      } else if (layer.getVisible()) {
+        layer.setVisible(false);
+      }
+    });
+  }, [activePreparedTerrain, topographicOpacity, topographicVisibility]);
+
+  useEffect(() => {
+    const selected = drawingTools.selectedElementInfo;
+    if (!selected?.bboxWgs84) return;
+    const job = terrainJobs.jobs[selected.id];
+    if (job?.state !== "completed" || !job.result || !job.jobId) return;
+    const sameExtent = selected.bboxWgs84.every((coordinate, index) => (
+      Math.abs(coordinate - job.result!.coverage.extent_wgs84[index]) < 1e-7
+    ));
+    const displayKey = `${selected.id}:${job.jobId}`;
+    if (!sameExtent || displayedTerrainJobsRef.current.has(displayKey)) return;
+    displayedTerrainJobsRef.current.add(displayKey);
+    activatePreparedTerrain(selected.id, job.result);
+  }, [activatePreparedTerrain, drawingTools.selectedElementInfo, terrainJobs.jobs]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -434,7 +538,29 @@ export default function App() {
 
           <section className="layer-section topography-section" aria-labelledby="topography-title">
             <h2 className="eyebrow" id="topography-title">TOPOGRAFÍA</h2>
-            <p className="overlay-intro">La capa visible se ajusta a la escala y cobertura del mapa.</p>
+            <p className="overlay-intro">
+              {activePreparedTerrain
+                ? "El terreno preparado tiene prioridad. Al cerrarlo, vuelve el relieve mundial."
+                : "La capa visible se ajusta a la escala y cobertura del mapa."}
+            </p>
+            {activePreparedTerrain && (
+              <div className="active-terrain-card" role="status">
+                <div className="active-terrain-copy">
+                  <span className="eyebrow">TERRENO PREPARADO · {activePreparedTerrain.result.coverage.resolution_m} M</span>
+                  <strong>{activePreparedTerrain.result.coverage.area_name}</strong>
+                </div>
+                <div className="active-terrain-actions">
+                  <Button variant="outline" size="small" onClick={centerPreparedTerrain}>
+                    <MapPinned size={14} aria-hidden="true" />
+                    Centrar
+                  </Button>
+                  <Button variant="ghost" size="small" onClick={closePreparedTerrain}>
+                    <X size={14} aria-hidden="true" />
+                    Cerrar
+                  </Button>
+                </div>
+              </div>
+            )}
             <div className="topographic-layer-list">
               {([
                 ["hillshade", Mountain],
@@ -450,7 +576,11 @@ export default function App() {
                       </span>
                       <span className="layer-copy">
                         <span className="layer-title">{layer.title}</span>
-                        <span className="layer-subtitle">{layer.description}</span>
+                          <span className="layer-subtitle">
+                            {activePreparedTerrain
+                              ? `${activePreparedTerrain.result.coverage.resolution_m} m · ${activePreparedTerrain.result.coverage.horizontal_crs}`
+                              : layer.description}
+                          </span>
                       </span>
                       <Switch
                         checked={topographicVisibility[id]}
@@ -481,26 +611,44 @@ export default function App() {
                 );
               })}
             </div>
-            {topographicVisibility.elevation && terrainCoverage && terrainRenderMode !== "hidden" && (
+            {topographicVisibility.elevation && (
+              (activePreparedTerrain || (terrainCoverage && terrainRenderMode !== "hidden"))
+            ) && (
               <div className="elevation-legend" aria-label="Leyenda de elevación en metros">
-                <span className="elevation-legend-title">Elevación · altura y profundidad (m)</span>
+                <span className="elevation-legend-title">
+                  {activePreparedTerrain ? "Elevación · metros" : "Elevación · altura y profundidad (m)"}
+                </span>
                 <div className="elevation-legend-gradient" aria-hidden="true" />
                 <div className="elevation-legend-values">
-                  <span>{Math.round(terrainCoverage.minElevation)} m</span>
-                  <span>0 m</span>
-                  <span>{Math.round(terrainCoverage.maxElevation)} m</span>
+                  {activePreparedTerrain ? (
+                    <>
+                      <span>{Math.round(activePreparedTerrain.result.coverage.elevation_min_m)} m</span>
+                      <span>{Math.round((activePreparedTerrain.result.coverage.elevation_min_m + activePreparedTerrain.result.coverage.elevation_max_m) / 2)} m</span>
+                      <span>{Math.round(activePreparedTerrain.result.coverage.elevation_max_m)} m</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>{Math.round(terrainCoverage!.minElevation)} m</span>
+                      <span>0 m</span>
+                      <span>{Math.round(terrainCoverage!.maxElevation)} m</span>
+                    </>
+                  )}
                 </div>
               </div>
             )}
-            {terrainServiceState === "loading" && (
+            {activePreparedTerrain ? (
+              <p className="terrain-coverage-note" role="status">
+                Mostrando el proyecto regional. Puedes activar por separado elevación y relieve sombreado.
+              </p>
+            ) : terrainServiceState === "loading" && (
               <p className="terrain-coverage-note" role="status">Comprobando los datos topográficos preparados…</p>
             )}
-            {terrainServiceState === "unavailable" && (
+            {!activePreparedTerrain && terrainServiceState === "unavailable" && (
               <p className="terrain-coverage-note terrain-coverage-note--error" role="status">
                 El servicio de elevación no está disponible. El mapa base y las herramientas siguen funcionando.
               </p>
             )}
-            {terrainServiceState === "available" && terrainCoverage && (
+            {!activePreparedTerrain && terrainServiceState === "available" && terrainCoverage && (
               <p className="terrain-coverage-note" role="status">
                 {!hasTopographicPreference
                   ? "Relieve desactivado."
@@ -535,6 +683,12 @@ export default function App() {
           <GeometryDetails
             element={drawingTools.selectedElementInfo}
             onRename={drawingTools.renameElement}
+            terrainPreparation={selectedTerrainPreparation}
+            terrainIsActive={selectedTerrainIsActive}
+            onPrepareTerrain={handlePrepareTerrain}
+            onShowPreparedTerrain={showPreparedTerrain}
+            onClosePreparedTerrain={closePreparedTerrain}
+            onCenterPreparedTerrain={centerPreparedTerrain}
           />
 
           <div className="panel-spacer" />
