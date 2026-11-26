@@ -4,4 +4,6 @@
 !.env.example
 node_modules/
 prod/
+dist/
+.vite/
 **/.DS_Store

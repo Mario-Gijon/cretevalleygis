@@ -12,9 +12,13 @@ cd CreteValleyGIS
 docker compose up --build -d
 ```
 
-Abre <http://localhost:5176/?t=qwc_demo> para cargar directamente el tema de muestra. En este entorno el puerto 5175 ya está ocupado. Para ver los registros: `docker compose logs -f`. Para detenerlo: `docker compose down`.
+Abre <http://localhost:5176/?t=qwc_demo> para cargar directamente el tema de muestra. En este entorno el puerto 5175 ya está ocupado.
 
-El visor consume el WMS de demostración publicado por QWC2 y las capas base OpenStreetMap y NASA GIBS; necesita conexión a Internet para mostrar esos datos. No se inicia una base de datos ni se requieren servicios propios para esta demo.
+El frontend GIS propio está en `Frontend/` y se sirve en <http://localhost:5177>. Se inicia junto con QWC2 con el mismo comando; Vite mantiene hot reload. Para ver los registros: `docker compose logs -f`. Para detener ambos servicios: `docker compose down`.
+
+El frontend propio usa OpenStreetMap como capa base y muestra su atribución en el mapa. Requiere Internet; el servidor público de teselas es de disponibilidad best-effort y esta configuración es para desarrollo local, no para producción.
+
+El visor QWC2 consume su WMS de demostración y las capas OpenStreetMap y NASA GIBS; también requiere Internet. No se inicia una base de datos ni un servidor cartográfico propio en este hito.
 
 ## Licencias
 
