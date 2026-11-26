@@ -2,6 +2,8 @@ import { useCallback, useRef, useState } from "react";
 import Collection from "ol/Collection.js";
 import Feature from "ol/Feature.js";
 import type Geometry from "ol/geom/Geometry.js";
+import LineString from "ol/geom/LineString.js";
+import Polygon from "ol/geom/Polygon.js";
 import Draw from "ol/interaction/Draw.js";
 import Modify from "ol/interaction/Modify.js";
 import Select from "ol/interaction/Select.js";
@@ -102,6 +104,7 @@ export function useDrawingTools() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedElementInfo, setSelectedElementInfo] = useState<SelectedElementInfo>(null);
   const [drawingInProgress, setDrawingInProgress] = useState(false);
+  const [drawingCanFinish, setDrawingCanFinish] = useState(false);
   const [measurementResult, setMeasurementResult] = useState<MeasurementResult | null>(null);
   const activeToolRef = useRef<MapTool>("navigate");
   const drawInteractionsRef = useRef<DrawInteractions>({});
@@ -168,6 +171,7 @@ export function useDrawingTools() {
     activeToolRef.current = nextTool;
     setActiveToolState(nextTool);
     setDrawingInProgress(false);
+    setDrawingCanFinish(false);
   }, [measurementSource]);
 
   const connectMap = useCallback((map: OlMap): MapCleanup => {
@@ -180,14 +184,39 @@ export function useDrawingTools() {
 
     for (const [tool, type] of Object.entries(TOOL_TYPES) as ["point" | "line" | "polygon", DrawingGeometry][]) {
       const draw = new Draw({ source, type, stopClick: true });
-      draw.on("drawstart", () => setDrawingInProgress(true));
-      draw.on("drawabort", () => setDrawingInProgress(false));
+      let geometryKey: EventsKey | undefined;
+      const stopTracking = () => {
+        if (geometryKey) unByKey(geometryKey);
+        geometryKey = undefined;
+      };
+      draw.on("drawstart", ({ feature }) => {
+        setDrawingInProgress(true);
+        setDrawingCanFinish(false);
+        const geometry = feature.getGeometry();
+        if (!geometry) return;
+        const updateCanFinish = () => {
+          const canFinish = tool === "line"
+            ? geometry instanceof LineString && geometry.getCoordinates().length >= 3
+            : tool === "polygon" && geometry instanceof Polygon && (geometry.getCoordinates()[0]?.length ?? 0) >= 5;
+          setDrawingCanFinish(canFinish);
+        };
+        geometryKey = geometry.on("change", updateCanFinish);
+        updateCanFinish();
+      });
+      draw.on("drawabort", () => {
+        stopTracking();
+        setDrawingInProgress(false);
+        setDrawingCanFinish(false);
+      });
       draw.on("drawend", ({ feature }) => {
+        stopTracking();
         countsRef.current[type] += 1;
         feature.setId(`drawing-${nextIdRef.current++}`);
         feature.set("name", `${geometryNames[type]} ${countsRef.current[type]}`);
         setDrawingInProgress(false);
+        setDrawingCanFinish(false);
         refreshElements();
+        setActiveTool("navigate");
       });
       draws[tool] = draw;
       map.addInteraction(draw);
@@ -220,10 +249,13 @@ export function useDrawingTools() {
         const result = geometry && getMeasurementResult(geometry, kind, map.getView().getProjection());
         if (result) setMeasurementResult(result);
         setDrawingInProgress(false);
+        setDrawingCanFinish(false);
+        setActiveTool("navigate");
       });
       draw.on("drawabort", () => {
         stopTracking();
         setDrawingInProgress(false);
+        setDrawingCanFinish(false);
         setMeasurementResult(null);
         measurementSource.clear();
       });
@@ -261,6 +293,9 @@ export function useDrawingTools() {
       source.un("addfeature", updateElements);
       source.un("removefeature", updateElements);
       source.un("changefeature", updateElements);
+      for (const draw of [...Object.values(draws), ...Object.values(measurementDraws)]) {
+        draw?.abortDrawing();
+      }
       for (const interaction of [...Object.values(draws), ...Object.values(measurementDraws), select, modify]) {
         if (interaction) map.removeInteraction(interaction);
       }
@@ -271,8 +306,9 @@ export function useDrawingTools() {
       modifyInteractionRef.current = null;
       mapRef.current = null;
       setDrawingInProgress(false);
+      setDrawingCanFinish(false);
     };
-  }, [layer, measurementSource, refreshElements, refreshSelection, source]);
+  }, [layer, measurementSource, refreshElements, refreshSelection, setActiveTool, source]);
 
   const cancelDrawing = useCallback(() => {
     const activeTool = activeToolRef.current;
@@ -298,11 +334,19 @@ export function useDrawingTools() {
     measurementResult.kind === "distance" ? measurementResult.vertices >= 2 : measurementResult.vertices >= 3
   );
 
-  const finishMeasurement = useCallback(() => {
+  const canFinishTrace = isMeasurementTool(activeToolState)
+    ? canFinishMeasurement
+    : (activeToolState === "line" || activeToolState === "polygon") && drawingCanFinish;
+
+  const finishTrace = useCallback(() => {
     const activeTool = activeToolRef.current;
-    if (!isMeasurementTool(activeTool) || !canFinishMeasurement) return;
-    measurementInteractionsRef.current[activeTool]?.finishDrawing();
-  }, [canFinishMeasurement]);
+    if (!canFinishTrace) return;
+    if (isMeasurementTool(activeTool)) {
+      measurementInteractionsRef.current[activeTool]?.finishDrawing();
+    } else if (activeTool === "line" || activeTool === "polygon") {
+      drawInteractionsRef.current[activeTool]?.finishDrawing();
+    }
+  }, [canFinishTrace]);
 
   const selectElement = useCallback((id: string) => {
     const feature = source.getFeatureById(id);
@@ -351,13 +395,14 @@ export function useDrawingTools() {
     selectedElementInfo,
     activeTool: activeToolState,
     drawingInProgress,
+    canFinishTrace,
     measurementResult,
     canFinishMeasurement,
     connectMap,
     setActiveTool,
     cancelDrawing,
     clearMeasurements,
-    finishMeasurement,
+    finishTrace,
     selectElement,
     centerElement,
     deleteSelected,

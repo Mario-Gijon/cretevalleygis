@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Layers,
   LoaderCircle,
@@ -93,6 +93,39 @@ export default function App() {
     drawingTools.selectElement(id);
     drawingTools.centerElement(id);
   };
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        target.closest("input, textarea, select, [contenteditable='true'], [role='textbox']")
+      ) return;
+
+      if (event.key === "Escape" && drawingTools.activeTool !== "navigate") {
+        event.preventDefault();
+        drawingTools.cancelDrawing();
+      } else if (event.key === "Enter" && drawingTools.canFinishTrace) {
+        event.preventDefault();
+        drawingTools.finishTrace();
+      } else if ((event.key === "Delete" || event.key === "Del") && drawingTools.selectedIds.length > 0) {
+        event.preventDefault();
+        drawingTools.deleteSelected();
+      }
+    };
+
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [
+    drawingTools.activeTool,
+    drawingTools.canFinishTrace,
+    drawingTools.cancelDrawing,
+    drawingTools.deleteSelected,
+    drawingTools.finishTrace,
+    drawingTools.selectedIds.length,
+  ]);
 
   return (
     <div className="app-shell" data-theme={theme}>
@@ -226,8 +259,8 @@ export default function App() {
             onToolChange={drawingTools.setActiveTool}
             onCancel={drawingTools.cancelDrawing}
             onClearMeasurements={drawingTools.clearMeasurements}
-            onFinishMeasurement={drawingTools.finishMeasurement}
-            canFinishMeasurement={drawingTools.canFinishMeasurement}
+            onFinishTrace={drawingTools.finishTrace}
+            canFinishTrace={drawingTools.canFinishTrace}
             onDelete={drawingTools.deleteSelected}
           />
 

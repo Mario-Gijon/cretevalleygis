@@ -727,6 +727,14 @@ button {
   font-weight: 650;
 }
 
+.measurement-hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
 .app-shell[data-theme="dark"] .measurement-readout {
   color: #83d7d3;
 }

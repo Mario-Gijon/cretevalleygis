@@ -25,8 +25,8 @@ type DrawingToolbarProps = {
   onToolChange: (tool: MapTool) => void;
   onCancel: () => void;
   onClearMeasurements: () => void;
-  onFinishMeasurement: () => void;
-  canFinishMeasurement: boolean;
+  onFinishTrace: () => void;
+  canFinishTrace: boolean;
   onDelete: () => void;
 };
 
@@ -40,17 +40,17 @@ const tools = [
 ] as const;
 
 const instructions = {
-  navigate: "Arrastra para mover el mapa. Usa + y − para cambiar el zoom.",
-  point: "Pulsa en el mapa para colocar un punto.",
-  line: "Pulsa para añadir vértices y dos veces para terminar la línea.",
-  polygon: "Pulsa para marcar el contorno y dos veces para cerrar el área.",
-  select: "Pulsa un elemento dibujado para seleccionarlo.",
-  modify: "Arrastra los vértices del elemento seleccionado para editarlo.",
+  navigate: "Arrastra para mover el mapa. Pulsa Explorar o Escape para salir de una herramienta.",
+  point: "Pulsa en el mapa para colocar un punto. Se guarda al instante; Escape sale.",
+  line: "Añade al menos 2 puntos. Termina con Terminar, doble clic o Enter; Escape cancela.",
+  polygon: "Marca al menos 3 vértices. Termina con Terminar, doble clic o Enter; Escape cancela.",
+  select: "Pulsa un elemento para seleccionarlo. Después puedes borrarlo con Supr o Eliminar.",
+  modify: "Arrastra sus vértices para editarlo. Pulsa Supr o Eliminar para borrarlo.",
 } satisfies Record<(typeof tools)[number]["id"], string>;
 
 const measurementChoices: { id: MeasurementTool; label: string; instruction: string }[] = [
-  { id: "measure-distance", label: "Distancia", instruction: "Pulsa para añadir puntos y termina cuando quieras." },
-  { id: "measure-area", label: "Superficie", instruction: "Pulsa para marcar el contorno y termina cuando quieras." },
+  { id: "measure-distance", label: "Distancia", instruction: "Añade al menos 2 puntos. Termina con Terminar o Enter; Escape cancela." },
+  { id: "measure-area", label: "Superficie", instruction: "Marca al menos 3 vértices. Termina con Terminar o Enter; Escape cancela." },
 ];
 
 function isMeasurementTool(tool: MapTool): tool is MeasurementTool {
@@ -65,12 +65,13 @@ export function DrawingToolbar({
   onToolChange,
   onCancel,
   onClearMeasurements,
-  onFinishMeasurement,
-  canFinishMeasurement,
+  onFinishTrace,
+  canFinishTrace,
   onDelete,
 }: DrawingToolbarProps) {
   const [measureMenuOpen, setMeasureMenuOpen] = useState(false);
   const isDrawingTool = activeTool === "point" || activeTool === "line" || activeTool === "polygon";
+  const isFinishableDrawing = activeTool === "line" || activeTool === "polygon";
   const activeMeasurement = isMeasurementTool(activeTool);
   const instruction = isMeasurementTool(activeTool)
     ? measurementChoices.find((choice) => choice.id === activeTool)?.instruction
@@ -140,39 +141,65 @@ export function DrawingToolbar({
             variant="ghost"
             size="small"
             className="drawing-action-button"
-            aria-label="Cancelar dibujo"
-            title={drawingInProgress ? "Cancelar el dibujo actual" : "Salir de la herramienta de dibujo"}
+            aria-label={drawingInProgress ? "Cancelar dibujo" : "Salir del dibujo"}
+            title={drawingInProgress ? "Cancelar este trazado y salir" : "Salir de la herramienta de dibujo"}
+            onClick={onCancel}
+          >
+            <X size={16} aria-hidden="true" />
+            <span>{drawingInProgress ? "Cancelar" : "Salir"}</span>
+          </Button>
+        )}
+        {(isFinishableDrawing || activeMeasurement) && (
+          <Button
+            variant="ghost"
+            size="small"
+            className="drawing-action-button"
+            aria-label="Terminar trazado"
+            title="Terminar el trazado y volver a Explorar"
+            disabled={!drawingInProgress || !canFinishTrace}
+            onClick={onFinishTrace}
+          >
+            <Check size={16} aria-hidden="true" />
+            <span>Terminar</span>
+          </Button>
+        )}
+        {activeMeasurement && drawingInProgress && (
+          <Button
+            variant="ghost"
+            size="small"
+            className="drawing-action-button"
+            aria-label="Cancelar medición"
+            title="Cancelar este trazado temporal y volver a Explorar"
             onClick={onCancel}
           >
             <X size={16} aria-hidden="true" />
             <span>Cancelar</span>
           </Button>
         )}
-        {activeMeasurement && (
+        {activeMeasurement && !drawingInProgress && !measurementResult && (
           <Button
             variant="ghost"
             size="small"
             className="drawing-action-button"
-            aria-label="Terminar medición"
-            title="Terminar el trazado y conservar el resultado"
-            disabled={!drawingInProgress || !canFinishMeasurement}
-            onClick={onFinishMeasurement}
-          >
-            <Check size={16} aria-hidden="true" />
-            <span>Terminar</span>
-          </Button>
-        )}
-        {(activeMeasurement || measurementResult !== null) && (
-          <Button
-            variant="ghost"
-            size="small"
-            className="drawing-action-button"
-            aria-label={activeMeasurement && drawingInProgress ? "Cancelar medición" : "Limpiar medición"}
-            title={activeMeasurement && drawingInProgress ? "Cancelar y limpiar la medición" : "Limpiar la medición"}
-            onClick={onClearMeasurements}
+            aria-label="Salir de medición"
+            title="Salir de la herramienta de medición"
+            onClick={onCancel}
           >
             <X size={16} aria-hidden="true" />
-            <span>{activeMeasurement && drawingInProgress ? "Cancelar" : "Limpiar"}</span>
+            <span>Salir</span>
+          </Button>
+        )}
+        {measurementResult && !(activeMeasurement && drawingInProgress) && (
+          <Button
+            variant="ghost"
+            size="small"
+            className="drawing-action-button"
+            aria-label="Borrar medición"
+            title="Borrar la medición temporal"
+            onClick={onClearMeasurements}
+          >
+            <Trash2 size={16} aria-hidden="true" />
+            <span>Borrar medición</span>
           </Button>
         )}
         {selectedCount > 0 && (
@@ -197,6 +224,9 @@ export function DrawingToolbar({
             {measurementResult.kind === "distance" && ` · ${measurementResult.vertices} puntos`}
             {measurementResult.kind === "area" && ` · ${measurementResult.vertices} vértices`}
           </strong>
+        )}
+        {measurementResult && !(activeMeasurement && drawingInProgress) && (
+          <span className="measurement-hint">Medición temporal. Pulsa «Borrar medición» para quitarla.</span>
         )}
       </div>
     </>
