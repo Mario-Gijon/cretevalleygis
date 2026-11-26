@@ -27,6 +27,8 @@ services:
     environment:
       QT_QPA_PLATFORM: offscreen
       QGIS_PREFIX_PATH: /usr
+      TERRAIN_AREA_NAME: "${TERRAIN_AREA_NAME:-Macizo del Ida, Creta}"
+      TERRAIN_BBOX: "${TERRAIN_BBOX:-24.60,35.10,24.96,35.35}"
     volumes:
       - ./QGIS/scripts:/io/scripts:ro
       - qgis_world_data:/io/data

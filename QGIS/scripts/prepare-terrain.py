@@ -1,0 +1,633 @@
+#!/usr/bin/python3
+"""Prepare a small Copernicus GLO-30 terrain area for the existing QGIS WMS.
+
+Original COG tiles and derived rasters live in separate persistent-volume
+directories. Use --bbox and --name to prepare another small area later.
+"""
+
+from __future__ import annotations
+
+import argparse
+from datetime import datetime, timezone
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import re
+import shutil
+import tempfile
+import urllib.request
+
+from osgeo import gdal
+from qgis.core import (
+    Qgis,
+    QgsApplication,
+    QgsColorRampShader,
+    QgsContrastEnhancement,
+    QgsProject,
+    QgsRasterLayer,
+    QgsRasterShader,
+    QgsSingleBandGrayRenderer,
+    QgsSingleBandPseudoColorRenderer,
+)
+from qgis.PyQt.QtGui import QColor
+
+
+DATA_ROOT = Path("/io/data/terrain")
+SOURCE_ROOT = DATA_ROOT / "source"
+SOURCE_TILES = SOURCE_ROOT / "tiles"
+DERIVED_ROOT = DATA_ROOT / "derived"
+SOURCE_MANIFEST = DATA_ROOT / "source-manifest.json"
+DERIVED_MANIFEST = DATA_ROOT / "derived-manifest.json"
+PROJECT_PATH = Path("/io/data/world/world.qgs")
+NATURAL_EARTH_DATA = Path("/io/data/world/data")
+S3_ROOT = "https://copernicus-dem-30m.s3.amazonaws.com"
+PRODUCT = "Copernicus DEM GLO-30 Public"
+SOURCE_NODATA = -9999.0
+MAX_TILES_PER_RUN = 4
+RASTER_CREATION_OPTIONS = ["TILED=YES", "COMPRESS=DEFLATE", "PREDICTOR=3", "BIGTIFF=IF_SAFER"]
+HILLSHADE_CREATION_OPTIONS = ["TILED=YES", "COMPRESS=DEFLATE", "PREDICTOR=2", "BIGTIFF=IF_SAFER"]
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def read_manifest(path: Path) -> dict:
+    if not path.exists():
+        return {"format": 1, "tiles": {}}
+    try:
+        manifest = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"Cannot read terrain manifest {path}: {error}") from error
+    if manifest.get("format") != 1 or not isinstance(manifest.get("tiles"), dict):
+        raise RuntimeError(f"Unsupported terrain manifest: {path}")
+    return manifest
+
+
+def write_manifest(path: Path, manifest: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    os.replace(temp_path, path)
+
+
+def parse_bbox(value: str) -> tuple[float, float, float, float]:
+    try:
+        bbox = tuple(float(part.strip()) for part in value.split(","))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("bbox must be west,south,east,north") from error
+    if len(bbox) != 4:
+        raise argparse.ArgumentTypeError("bbox must be west,south,east,north")
+    west, south, east, north = bbox
+    if not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
+        raise argparse.ArgumentTypeError("bbox must be an increasing WGS84 longitude/latitude extent")
+    if east - west > 2 or north - south > 2:
+        raise argparse.ArgumentTypeError("terrain preparation is limited to small areas (max 2° × 2°)")
+    return bbox  # type: ignore[return-value]
+
+
+def arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--bbox",
+        default=os.environ.get("TERRAIN_BBOX"),
+        help="WGS84 extent west,south,east,north (or TERRAIN_BBOX)",
+    )
+    parser.add_argument(
+        "--name",
+        default=os.environ.get("TERRAIN_AREA_NAME", "Terrain area"),
+        help="human-readable name for this terrain coverage",
+    )
+    args = parser.parse_args()
+    if not args.bbox:
+        parser.error("--bbox or TERRAIN_BBOX is required")
+    args.bbox = parse_bbox(args.bbox)
+    args.name = args.name.strip()
+    if not args.name:
+        parser.error("--name cannot be empty")
+    return args
+
+
+def tile_stem(longitude: int, latitude: int) -> str:
+    northing = f"{'N' if latitude >= 0 else 'S'}{abs(latitude):02d}_00"
+    easting = f"{'E' if longitude >= 0 else 'W'}{abs(longitude):03d}_00"
+    return f"Copernicus_DSM_COG_10_{northing}_{easting}_DEM"
+
+
+def selected_tiles(bbox: tuple[float, float, float, float]) -> list[str]:
+    west, south, east, north = bbox
+    first_x, last_x = math.floor(west), math.ceil(east) - 1
+    first_y, last_y = math.floor(south), math.ceil(north) - 1
+    stems = [tile_stem(x, y) for y in range(first_y, last_y + 1) for x in range(first_x, last_x + 1)]
+    if not stems or len(stems) > MAX_TILES_PER_RUN:
+        raise ValueError(f"Area selects {len(stems)} tiles; the safety limit is {MAX_TILES_PER_RUN}")
+    return stems
+
+
+def validate_cog(path: Path) -> tuple[float | None, list[int]]:
+    dataset = gdal.Open(str(path), gdal.GA_ReadOnly)
+    if dataset is None:
+        raise ValueError(f"GDAL cannot open source tile: {path}")
+    if dataset.RasterCount != 1 or dataset.RasterXSize < 300 or dataset.RasterYSize < 300:
+        raise ValueError(f"Unexpected dimensions or band count in source tile: {path}")
+    band = dataset.GetRasterBand(1)
+    if band.DataType != gdal.GDT_Float32:
+        raise ValueError(f"Expected a 32-bit float Copernicus DEM tile: {path}")
+    spatial_ref = dataset.GetSpatialRef()
+    # These public COGs are EPSG:4326, but their WKT axis-order metadata can
+    # differ from canonical EPSG WKT and make IsSame overly strict.
+    if not spatial_ref or spatial_ref.GetAuthorityCode(None) != "4326":
+        raise ValueError(f"Expected a WGS84 (EPSG:4326) source tile: {path}")
+    transform = dataset.GetGeoTransform()
+    if transform[1] <= 0 or transform[5] >= 0:
+        raise ValueError(f"Unexpected north-up pixel grid in source tile: {path}")
+    nodata = band.GetNoDataValue()
+    overviews = [band.GetOverview(index).XSize for index in range(band.GetOverviewCount())]
+    dataset = None
+    return nodata, overviews
+
+
+def download_or_reuse_tile(stem: str, manifest: dict) -> tuple[Path, dict, int]:
+    url = f"{S3_ROOT}/{stem}/{stem}.tif"
+    target = SOURCE_TILES / f"{stem}.tif"
+    previous = manifest["tiles"].get(stem, {})
+    if target.is_file():
+        try:
+            digest = sha256_file(target)
+            if previous.get("sha256") in (None, digest):
+                nodata, overviews = validate_cog(target)
+                record = {
+                    "url": url,
+                    "sha256": digest,
+                    "bytes": target.stat().st_size,
+                    "etag": previous.get("etag"),
+                    "nodata": nodata,
+                    "overview_widths": overviews,
+                }
+                print(f"Reusing original Copernicus tile: {stem}", flush=True)
+                return target, record, 0
+        except (OSError, ValueError) as error:
+            print(f"Cached Copernicus tile failed integrity checks; fetching a fresh copy: {error}", flush=True)
+
+    SOURCE_TILES.mkdir(parents=True, exist_ok=True)
+    descriptor, temp_name = tempfile.mkstemp(prefix=f".{stem}-", suffix=".partial", dir=SOURCE_TILES)
+    temp_path = Path(temp_name)
+    received = 0
+    etag = None
+    request = urllib.request.Request(url, headers={"User-Agent": "CreteValleyGIS/0.2 (local terrain preparation)"})
+    try:
+        with os.fdopen(descriptor, "wb") as output, urllib.request.urlopen(request, timeout=180) as response:
+            etag = response.headers.get("ETag", "").strip('"') or None
+            expected_bytes = int(response.headers.get("Content-Length", "0"))
+            while chunk := response.read(1024 * 1024):
+                output.write(chunk)
+                received += len(chunk)
+        if expected_bytes and received != expected_bytes:
+            raise IOError(f"Incomplete Copernicus tile download: expected {expected_bytes}, got {received} bytes")
+        nodata, overviews = validate_cog(temp_path)
+        digest = sha256_file(temp_path)
+        os.replace(temp_path, target)
+        record = {
+            "url": url,
+            "sha256": digest,
+            "etag": etag,
+            "bytes": received,
+            "nodata": nodata,
+            "overview_widths": overviews,
+            "downloaded_at_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        print(f"Downloaded and checked Copernicus tile {stem}: {received} bytes, SHA-256 {digest}", flush=True)
+        return target, record, received
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
+def area_slug(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.casefold()).strip("-")
+    return slug[:48] or "terrain-area"
+
+
+def local_metric_crs(bbox: tuple[float, float, float, float]) -> str:
+    west, south, east, north = bbox
+    longitude = (west + east) / 2
+    latitude = (south + north) / 2
+    if latitude >= 84:
+        return "EPSG:3413"
+    if latitude <= -80:
+        return "EPSG:3031"
+    zone = max(1, min(60, int((longitude + 180) // 6) + 1))
+    return f"EPSG:{32600 + zone if latitude >= 0 else 32700 + zone}"
+
+
+def write_cutline(bbox: tuple[float, float, float, float], path: Path) -> None:
+    west, south, east, north = bbox
+    ring = [[west, south], [east, south], [east, north], [west, north], [west, south]]
+    feature_collection = {
+        "type": "FeatureCollection",
+        "name": "terrain_bbox",
+        "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
+        "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [ring]}}],
+    }
+    path.write_text(json.dumps(feature_collection))
+
+
+def valid_raster(path: Path, *, min_width: int = 2) -> bool:
+    dataset = gdal.Open(str(path), gdal.GA_ReadOnly) if path.is_file() else None
+    if not dataset:
+        return False
+    valid = dataset.RasterCount == 1 and dataset.RasterXSize >= min_width and dataset.RasterYSize >= min_width
+    dataset = None
+    return valid
+
+
+def raster_stats(path: Path) -> tuple[float, float]:
+    dataset = gdal.Open(str(path), gdal.GA_ReadOnly)
+    if not dataset:
+        raise RuntimeError(f"Cannot open derived elevation: {path}")
+    band = dataset.GetRasterBand(1)
+    band.ComputeStatistics(False)
+    minimum, maximum, _, _ = band.GetStatistics(False, True)
+    if not math.isfinite(minimum) or not math.isfinite(maximum):
+        raise RuntimeError(f"Elevation statistics are not finite for {path}")
+    dataset = None
+    return minimum, maximum
+
+
+def natural_earth_land_10m() -> Path:
+    matches = sorted((NATURAL_EARTH_DATA / "land_10").glob("*/ne_10m_land.shp"))
+    if not matches:
+        raise RuntimeError("Natural Earth 1:10m land data is missing; terrain cannot mask ocean NoData safely")
+    return matches[0]
+
+
+def mask_ocean_as_nodata(elevation_path: Path, source_mosaic: Path, mask_path: Path) -> None:
+    """Mask zero-filled sea from the public COG while preserving 0 m land."""
+    elevation = gdal.Open(str(elevation_path), gdal.GA_Update)
+    if not elevation:
+        raise RuntimeError(f"Cannot open clipped elevation for NoData masking: {elevation_path}")
+    source = gdal.Open(str(source_mosaic), gdal.GA_ReadOnly)
+    source_transform = source.GetGeoTransform()
+    source_width, source_height = source.RasterXSize, source.RasterYSize
+    source_bounds = [source_transform[0], source_transform[3] + source_height * source_transform[5],
+                     source_transform[0] + source_width * source_transform[1], source_transform[3]]
+    source_land_mask = mask_path.with_name("land-mask-wgs84.tif")
+    geographic_mask = gdal.Rasterize(
+        str(source_land_mask), str(natural_earth_land_10m()),
+        options=gdal.RasterizeOptions(
+            format="GTiff",
+            outputBounds=source_bounds,
+            outputSRS=source.GetProjection(),
+            width=source_width,
+            height=source_height,
+            outputType=gdal.GDT_Byte,
+            burnValues=[1],
+            initValues=[0],
+            creationOptions=["TILED=YES", "COMPRESS=DEFLATE"],
+        ),
+    )
+    source = None
+    if geographic_mask is None:
+        raise RuntimeError("Could not rasterize the land polygons on the source grid")
+    geographic_mask = None
+    transform = elevation.GetGeoTransform()
+    width, height = elevation.RasterXSize, elevation.RasterYSize
+    bounds = [transform[0], transform[3] + height * transform[5],
+              transform[0] + width * transform[1], transform[3]]
+    mask = gdal.Warp(
+        str(mask_path), str(source_land_mask),
+        options=gdal.WarpOptions(
+            format="GTiff",
+            dstSRS=elevation.GetProjection(),
+            outputBounds=bounds,
+            width=width,
+            height=height,
+            resampleAlg="near",
+            dstNodata=0,
+            creationOptions=["TILED=YES", "COMPRESS=DEFLATE"],
+        ),
+    )
+    source_land_mask.unlink(missing_ok=True)
+    if mask is None or mask.RasterXSize != width or mask.RasterYSize != height:
+        raise RuntimeError("Could not warp the land mask onto the terrain grid")
+    dem_band = elevation.GetRasterBand(1)
+    mask_band = mask.GetRasterBand(1)
+    for y in range(0, height, 512):
+        rows = min(512, height - y)
+        values = dem_band.ReadAsArray(0, y, width, rows)
+        land = mask_band.ReadAsArray(0, y, width, rows) != 0
+        nodata = dem_band.GetNoDataValue()
+        invalid = ~land
+        if nodata is not None:
+            invalid |= values == nodata
+        values[invalid] = SOURCE_NODATA
+        dem_band.WriteArray(values, 0, y)
+    dem_band.SetNoDataValue(SOURCE_NODATA)
+    dem_band.SetUnitType("m")
+    dem_band.SetDescription("Elevation in metres above EGM2008")
+    elevation.FlushCache()
+    mask = None
+    elevation = None
+
+
+def build_derived(
+    source_paths: list[Path],
+    source_sha256: str,
+    area_name: str,
+    bbox: tuple[float, float, float, float],
+) -> tuple[Path, Path, dict]:
+    slug = area_slug(area_name)
+    bbox_text = ",".join(f"{value:.8f}" for value in bbox)
+    dst_crs = local_metric_crs(bbox)
+    signature = hashlib.sha256(f"{source_sha256}|{bbox_text}|{dst_crs}|30m-v1".encode()).hexdigest()[:16]
+    area_dir = DERIVED_ROOT / slug
+    version_dir = area_dir / signature
+    elevation_path = version_dir / "elevation.tif"
+    hillshade_path = version_dir / "hillshade.tif"
+    manifest = read_manifest(DERIVED_MANIFEST)
+    entry = manifest["tiles"].get(f"{slug}:{signature}", {})
+    if (
+        entry.get("source_sha256") == source_sha256
+        and valid_raster(elevation_path)
+        and valid_raster(hillshade_path)
+        and entry.get("elevation_sha256") == sha256_file(elevation_path)
+        and entry.get("hillshade_sha256") == sha256_file(hillshade_path)
+    ):
+        print(f"Reusing valid terrain derivatives for {area_name}.", flush=True)
+        # Earlier runs may leave this temporary mask inside the version folder.
+        (version_dir / "land-mask.tif").unlink(missing_ok=True)
+        (version_dir / "clip.geojson").unlink(missing_ok=True)
+        minimum, maximum = raster_stats(elevation_path)
+        return elevation_path, hillshade_path, {
+            **entry,
+            "area_name": area_name,
+            "bbox_wgs84": list(bbox),
+            "crs": dst_crs,
+            "elevation_min_m": minimum,
+            "elevation_max_m": maximum,
+        }
+
+    area_dir.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(tempfile.mkdtemp(prefix=f".{signature}-", dir=area_dir))
+    cutline_path = staging_dir / "clip.geojson"
+    temp_elevation = staging_dir / "elevation.tif"
+    temp_hillshade = staging_dir / "hillshade.tif"
+    temp_land_mask = staging_dir / "land-mask.tif"
+    write_cutline(bbox, cutline_path)
+    source_dataset = gdal.Open(str(source_paths[0]), gdal.GA_ReadOnly)
+    if not source_dataset:
+        raise RuntimeError(f"Cannot open original Copernicus tile: {source_paths[0]}")
+    input_nodata = source_dataset.GetRasterBand(1).GetNoDataValue()
+    source_dataset = None
+    warp_options = {
+        "format": "GTiff",
+        "dstSRS": dst_crs,
+        "cutlineDSName": str(cutline_path),
+        "cropToCutline": True,
+        "xRes": 30,
+        "yRes": 30,
+        "resampleAlg": "bilinear",
+        "dstNodata": SOURCE_NODATA,
+        "creationOptions": RASTER_CREATION_OPTIONS,
+        "multithread": False,
+    }
+    if input_nodata is not None:
+        warp_options["srcNodata"] = input_nodata
+    try:
+        elevation = gdal.Warp(
+            str(temp_elevation), [str(path) for path in source_paths], options=gdal.WarpOptions(**warp_options)
+        )
+        if elevation is None or elevation.RasterCount != 1 or elevation.RasterXSize < 2 or elevation.RasterYSize < 2:
+            raise RuntimeError("GDAL could not clip a valid terrain patch from the selected source tiles")
+        band = elevation.GetRasterBand(1)
+        band.SetNoDataValue(SOURCE_NODATA)
+        band.SetUnitType("m")
+        band.SetDescription("Elevation in metres above EGM2008")
+        elevation.SetMetadataItem("AREA_OR_POINT", "Point")
+        elevation.SetMetadataItem("COPERNICUS_SOURCE", PRODUCT)
+        elevation = None
+        source_mosaic = staging_dir / "source-mosaic.vrt"
+        mosaic = gdal.BuildVRT(str(source_mosaic), [str(path) for path in source_paths])
+        if mosaic is None:
+            raise RuntimeError("Could not build a virtual mosaic of selected Copernicus source tiles")
+        mosaic = None
+        mask_ocean_as_nodata(temp_elevation, source_mosaic, temp_land_mask)
+        source_mosaic.unlink(missing_ok=True)
+        elevation = gdal.Open(str(temp_elevation), gdal.GA_Update)
+        elevation.BuildOverviews("AVERAGE", [2, 4, 8, 16])
+        elevation.FlushCache()
+        elevation = None
+
+        hillshade_options = gdal.DEMProcessingOptions(
+            format="GTiff",
+            creationOptions=HILLSHADE_CREATION_OPTIONS,
+            computeEdges=True,
+            zFactor=1.0,
+            scale=1.0,
+            altitude=45,
+            multiDirectional=True,
+        )
+        hillshade = gdal.DEMProcessing(str(temp_hillshade), str(temp_elevation), "hillshade", options=hillshade_options)
+        if hillshade is None or hillshade.RasterCount != 1:
+            raise RuntimeError(f"GDAL could not derive hillshade from {temp_elevation}")
+        hillshade.GetRasterBand(1).SetDescription("Multidirectional hillshade")
+        hillshade.SetMetadataItem("COPERNICUS_SOURCE", PRODUCT)
+        hillshade.BuildOverviews("AVERAGE", [2, 4, 8, 16])
+        hillshade.FlushCache()
+        hillshade = None
+        if not valid_raster(temp_elevation) or not valid_raster(temp_hillshade):
+            raise RuntimeError("GDAL created an invalid terrain derivative")
+
+        # Keep only source and deliverable rasters in the persistent volume.
+        cutline_path.unlink(missing_ok=True)
+        temp_land_mask.unlink(missing_ok=True)
+        minimum, maximum = raster_stats(temp_elevation)
+        final_dir = version_dir
+        if final_dir.exists():
+            suffix = 1
+            while final_dir.exists():
+                final_dir = area_dir / f"{signature}-repair-{suffix}"
+                suffix += 1
+        os.replace(staging_dir, final_dir)
+        staging_dir = final_dir
+        elevation_path = final_dir / "elevation.tif"
+        hillshade_path = final_dir / "hillshade.tif"
+        record = {
+            "source_sha256": source_sha256,
+            "elevation_sha256": sha256_file(elevation_path),
+            "hillshade_sha256": sha256_file(hillshade_path),
+            "area_name": area_name,
+            "bbox_wgs84": list(bbox),
+            "crs": dst_crs,
+            "vertical_datum": "EGM2008",
+            "resolution_m": 30,
+            "nodata": SOURCE_NODATA,
+            "elevation_min_m": minimum,
+            "elevation_max_m": maximum,
+        }
+        manifest["tiles"][f"{slug}:{signature}"] = record
+        write_manifest(DERIVED_MANIFEST, manifest)
+        return elevation_path, hillshade_path, record
+    except Exception:
+        if staging_dir.exists() and staging_dir != version_dir:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+
+
+def set_elevation_renderer(layer: QgsRasterLayer, minimum: float, maximum: float) -> None:
+    if maximum <= minimum:
+        maximum = minimum + 1.0
+    fractions = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+    colors = ("#315b82", "#4b906f", "#9db76f", "#d0bd79", "#a97858", "#f3efe4")
+    labels = ("Baja", "", "", "", "", "Alta")
+    ramp_items = [
+        QgsColorRampShader.ColorRampItem(
+            minimum + (maximum - minimum) * fraction,
+            QColor(color),
+            label or f"{minimum + (maximum - minimum) * fraction:.0f} m",
+        )
+        for fraction, color, label in zip(fractions, colors, labels)
+    ]
+    shader_function = QgsColorRampShader(minimum, maximum)
+    shader_function.setColorRampType(QgsColorRampShader.Interpolated)
+    shader_function.setColorRampItemList(ramp_items)
+    shader = QgsRasterShader(minimum, maximum)
+    shader.setRasterShaderFunction(shader_function)
+    layer.setRenderer(QgsSingleBandPseudoColorRenderer(layer.dataProvider(), 1, shader))
+
+
+def style_hillshade(layer: QgsRasterLayer) -> None:
+    provider = layer.dataProvider()
+    renderer = QgsSingleBandGrayRenderer(provider, 1)
+    enhancement = QgsContrastEnhancement(provider.dataType(1))
+    enhancement.setContrastEnhancementAlgorithm(QgsContrastEnhancement.StretchToMinimumMaximum)
+    enhancement.setMinimumValue(1)
+    enhancement.setMaximumValue(255)
+    renderer.setContrastEnhancement(enhancement)
+    layer.setRenderer(renderer)
+
+
+def set_raster_metadata(layer: QgsRasterLayer, title: str, abstract: str) -> None:
+    metadata = layer.metadata()
+    metadata.setTitle(title)
+    metadata.setAbstract(abstract)
+    layer.setMetadata(metadata)
+    server_metadata = layer.serverProperties()
+    server_metadata.setTitle(title)
+    server_metadata.setAbstract(abstract)
+    server_metadata.setAttribution(
+        "© DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 "
+        "provided under COPERNICUS by the European Union and ESA; all rights reserved."
+    )
+    server_metadata.setAttributionUrl(
+        "https://dataspace.copernicus.eu/sites/default/files/media/files/2025-06/"
+        "copernicus_contributing_mission_data_access_v2_cop_dem_licenses.pdf"
+    )
+
+
+def add_terrain_to_project(elevation_path: Path, hillshade_path: Path, record: dict) -> None:
+    project = QgsProject.instance()
+    if not project.read(str(PROJECT_PATH)):
+        raise RuntimeError(f"Could not open the existing QGIS project: {PROJECT_PATH}")
+    project.setFilePathStorage(Qgis.FilePathType.Relative)
+    for name in ("terrain_hillshade", "terrain_elevation"):
+        for layer in project.mapLayersByName(name):
+            project.removeMapLayer(layer.id())
+
+    area_name = record["area_name"]
+    min_m = record["elevation_min_m"]
+    max_m = record["elevation_max_m"]
+    crs = record["crs"]
+    bbox = record["bbox_wgs84"]
+    shared_abstract = (
+        f"Area: {area_name}; extent WGS84: {bbox[0]:.6f},{bbox[1]:.6f},"
+        f"{bbox[2]:.6f},{bbox[3]:.6f}; elevation min/max m: {min_m:.1f}/{max_m:.1f}; "
+        f"horizontal CRS: {crs}; vertical datum: EGM2008; NoData: {SOURCE_NODATA:g}. "
+        "Copernicus GLO-30 Public is a digital surface model (vegetation and buildings can affect elevations)."
+    )
+    elevation = QgsRasterLayer(str(elevation_path), "terrain_elevation", "gdal")
+    hillshade = QgsRasterLayer(str(hillshade_path), "terrain_hillshade", "gdal")
+    if not elevation.isValid() or not hillshade.isValid():
+        raise RuntimeError("QGIS could not load both terrain rasters")
+    set_elevation_renderer(elevation, min_m, max_m)
+    style_hillshade(hillshade)
+    set_raster_metadata(elevation, f"Elevación del terreno — {area_name}", f"{PRODUCT}, 30 m; elevation units: metres. {shared_abstract}")
+    set_raster_metadata(hillshade, f"Relieve sombreado — {area_name}", f"Hillshade derived with GDAL from {PRODUCT}, 30 m. {shared_abstract}")
+    project.addMapLayer(elevation)
+    project.addMapLayer(hillshade)
+
+    temp_project = PROJECT_PATH.parent / "world.with-terrain.next.qgs"
+    project.setFileName(str(temp_project))
+    if not project.write():
+        raise RuntimeError(f"Could not write the QGIS project with terrain layers: {temp_project}")
+    os.replace(temp_project, PROJECT_PATH)
+
+
+def make_terrain_readable() -> None:
+    # QGIS Server reads the shared volume as www-data; only normalize this
+    # milestone's files so existing Natural Earth data keeps its permissions.
+    directories = {DATA_ROOT, SOURCE_ROOT, SOURCE_TILES, DERIVED_ROOT}
+    files = {SOURCE_MANIFEST, DERIVED_MANIFEST, PROJECT_PATH}
+    for path in DERIVED_ROOT.rglob("*") if DERIVED_ROOT.exists() else ():
+        if path.is_dir():
+            directories.add(path)
+        else:
+            files.add(path)
+    files.update(SOURCE_TILES.glob("*.tif") if SOURCE_TILES.exists() else ())
+    for directory in directories:
+        if directory.exists():
+            directory.chmod(0o755)
+    for path in files:
+        if path.is_file():
+            path.chmod(0o644)
+
+
+def main() -> None:
+    args = arguments()
+    bbox = args.bbox
+    stems = selected_tiles(bbox)
+    source_manifest = read_manifest(SOURCE_MANIFEST)
+    downloaded_bytes = 0
+    sources: list[tuple[Path, str]] = []
+    for stem in stems:
+        path, record, received = download_or_reuse_tile(stem, source_manifest)
+        source_manifest["tiles"][stem] = record
+        downloaded_bytes += received
+        sources.append((path, record["sha256"]))
+    source_manifest["product"] = PRODUCT
+    source_manifest["source_resolution_arc_seconds"] = 1
+    source_manifest["source_vertical_datum"] = "EGM2008"
+    write_manifest(SOURCE_MANIFEST, source_manifest)
+
+    combined_source_hash = hashlib.sha256("".join(sorted(digest for _, digest in sources)).encode()).hexdigest()
+    elevation_path, hillshade_path, record = build_derived(
+        [path for path, _ in sources], combined_source_hash, args.name, bbox
+    )
+
+    QgsApplication.setPrefixPath(os.environ.get("QGIS_PREFIX_PATH", "/usr"), True)
+    app = QgsApplication([], False)
+    app.initQgis()
+    try:
+        add_terrain_to_project(elevation_path, hillshade_path, record)
+    finally:
+        app.exitQgis()
+
+    make_terrain_readable()
+    source_bytes = sum(path.stat().st_size for path in SOURCE_TILES.glob("*.tif"))
+    derived_bytes = sum(path.stat().st_size for path in DERIVED_ROOT.rglob("*.tif"))
+    print(f"Prepared Copernicus terrain coverage '{args.name}' at {bbox}.", flush=True)
+    print(f"Source tiles selected: {len(stems)}; bytes downloaded this run: {downloaded_bytes}.", flush=True)
+    print(f"Original COG storage: {source_bytes} bytes; derived raster storage: {derived_bytes} bytes.", flush=True)
+    print(f"Elevation range: {record['elevation_min_m']:.1f}–{record['elevation_max_m']:.1f} m; CRS {record['crs']}; NoData {SOURCE_NODATA:g}.", flush=True)
+    print("QGIS WMS layers: terrain_hillshade, terrain_elevation.", flush=True)
+
+
+if __name__ == "__main__":
+    gdal.UseExceptions()
+    main()

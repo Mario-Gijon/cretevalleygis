@@ -464,6 +464,150 @@ button {
   border-bottom: 0;
 }
 
+.topography-section {
+  margin-top: 24px;
+}
+
+.topographic-layer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.topographic-layer-card {
+  padding: 0 8px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-raised);
+}
+
+.topographic-layer-row {
+  gap: 8px;
+  border-bottom: 0;
+}
+
+.topographic-symbol {
+  color: #5b8462;
+}
+
+.topographic-symbol--elevation {
+  color: #92734d;
+}
+
+.topographic-opacity {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 8px;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.topographic-opacity output {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.topographic-opacity input {
+  width: 100%;
+  height: 18px;
+  grid-column: 1 / -1;
+  margin: 0;
+  accent-color: var(--cv-blue);
+  cursor: pointer;
+}
+
+.topographic-layer-error {
+  margin: 5px 2px 0;
+  color: #a8433d;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.elevation-legend {
+  display: grid;
+  gap: 5px;
+  margin-top: 9px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-soft);
+}
+
+.elevation-legend-title {
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.elevation-legend-gradient {
+  height: 10px;
+  border: 1px solid rgb(5 41 76 / 13%);
+  border-radius: 5px;
+  background: linear-gradient(90deg, #315b82 0%, #4b906f 20%, #9db76f 40%, #d0bd79 60%, #a97858 80%, #f3efe4 100%);
+}
+
+.elevation-legend-values {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.terrain-coverage-note {
+  margin: 9px 1px 0;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.terrain-coverage-note--empty {
+  border-color: #e9d3a0;
+  background: #fff9e9;
+  color: #735d2e;
+}
+
+.terrain-coverage-note--error,
+.topographic-layer-error {
+  color: #a8433d;
+}
+
+.app-shell[data-theme="dark"] .terrain-coverage-note--empty {
+  border-color: #675532;
+  background: #302b20;
+  color: #e4cb8a;
+}
+
+.app-shell[data-theme="dark"] .terrain-coverage-note--error,
+.app-shell[data-theme="dark"] .topographic-layer-error {
+  color: #ffc2bd;
+}
+
+.copernicus-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 9px 2px 0;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.copernicus-notice a {
+  color: var(--cv-blue);
+  font-weight: 600;
+}
+
+.app-shell[data-theme="dark"] .copernicus-notice a {
+  color: #83d7d3;
+}
+
 .overlay-symbol {
   display: grid;
   width: 30px;

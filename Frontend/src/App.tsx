@@ -11,6 +11,7 @@ import {
   MapPin,
   Minus,
   Moon,
+  Mountain,
   ScanLine,
   PanelLeftClose,
   Plus,
@@ -36,6 +37,17 @@ import {
   type GeographicOverlayId,
   type GeographicOverlayVisibility,
 } from "@/lib/cartographic-layers";
+import {
+  DEFAULT_TOPOGRAPHIC_OPACITY,
+  DEFAULT_TOPOGRAPHIC_VISIBILITY,
+  TOPOGRAPHIC_LAYERS,
+  parseTerrainCoverage,
+  type TerrainCoverage,
+  type TopographicAvailability,
+  type TopographicLayerId,
+  type TopographicOpacity,
+  type TopographicVisibility,
+} from "@/lib/topographic-layers";
 
 type ThemeMode = "light" | "dark";
 
@@ -45,6 +57,13 @@ function initialTheme(): ThemeMode {
   } catch {
     return "light";
   }
+}
+
+function extentsIntersect(
+  view: [number, number, number, number],
+  coverage: [number, number, number, number],
+): boolean {
+  return view[0] <= coverage[2] && view[2] >= coverage[0] && view[1] <= coverage[3] && view[3] >= coverage[1];
 }
 
 export default function App() {
@@ -65,6 +84,15 @@ export default function App() {
     rivers: true,
     lakes: true,
   });
+  const [topographicVisibility, setTopographicVisibility] = useState<TopographicVisibility>(DEFAULT_TOPOGRAPHIC_VISIBILITY);
+  const [topographicOpacity, setTopographicOpacity] = useState<TopographicOpacity>(DEFAULT_TOPOGRAPHIC_OPACITY);
+  const [topographicAvailability, setTopographicAvailability] = useState<TopographicAvailability>({
+    hillshade: true,
+    elevation: true,
+  });
+  const [terrainCoverage, setTerrainCoverage] = useState<TerrainCoverage | null>(null);
+  const [terrainServiceState, setTerrainServiceState] = useState<"loading" | "available" | "unavailable">("loading");
+  const [mapExtent, setMapExtent] = useState<[number, number, number, number] | null>(null);
   const [qgisStatus, setQgisStatus] = useState<QgisStatus>("idle");
   const [mapStatus, setMapStatus] = useState<MapStatus>({
     ready: false,
@@ -77,8 +105,9 @@ export default function App() {
     setMapStatus(status);
   }, []);
 
-  const handleMapCenterChange = useCallback((center: [number, number]) => {
+  const handleMapCenterChange = useCallback((center: [number, number], extent: [number, number, number, number]) => {
     setMapCenter(center);
+    setMapExtent(extent);
   }, []);
 
   const handleQgisStatusChange = useCallback((status: QgisStatus) => {
@@ -111,8 +140,44 @@ export default function App() {
     setOverlayVisibility((current) => ({ ...current, [id]: visible }));
   };
 
+  const changeTopographicVisibility = (id: TopographicLayerId, visible: boolean) => {
+    baseLayersRef.current?.topography[id].setVisible(visible);
+    setTopographicVisibility((current) => ({ ...current, [id]: visible }));
+  };
+
+  const changeTopographicOpacity = (id: TopographicLayerId, opacity: number) => {
+    baseLayersRef.current?.topography[id].setOpacity(opacity / 100);
+    setTopographicOpacity((current) => ({ ...current, [id]: opacity }));
+  };
+
   const handleOverlayAvailabilityChange = useCallback((id: GeographicOverlayId, available: boolean) => {
     setOverlayAvailability((current) => current[id] === available ? current : { ...current, [id]: available });
+  }, []);
+
+  const handleTopographicAvailabilityChange = useCallback((id: TopographicLayerId, available: boolean) => {
+    setTopographicAvailability((current) => current[id] === available ? current : { ...current, [id]: available });
+    if (available) setTerrainServiceState("available");
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/qgis/ogc/world?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities", { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(`QGIS WMS responded with ${response.status}`);
+        return response.text();
+      })
+      .then((xml) => {
+        if (controller.signal.aborted) return;
+        const coverage = parseTerrainCoverage(xml);
+        setTerrainCoverage(coverage);
+        setTerrainServiceState(coverage ? "available" : "unavailable");
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setTerrainCoverage(null);
+        setTerrainServiceState("unavailable");
+      });
+    return () => controller.abort();
   }, []);
 
   const changeZoom = (amount: number) => {
@@ -341,6 +406,92 @@ export default function App() {
             </div>
           </section>
 
+          <section className="layer-section topography-section" aria-labelledby="topography-title">
+            <h2 className="eyebrow" id="topography-title">TOPOGRAFÍA</h2>
+            <p className="overlay-intro">Relieve local de 30 m. Modelo de superficie: puede incluir edificios y vegetación.</p>
+            <div className="topographic-layer-list">
+              {([
+                ["hillshade", Mountain],
+                ["elevation", Layers],
+              ] as const).map(([id, Icon]) => {
+                const layer = TOPOGRAPHIC_LAYERS[id];
+                const opacityId = `topographic-opacity-${id}`;
+                return (
+                  <div className="topographic-layer-card" key={id}>
+                    <div className="overlay-layer-row topographic-layer-row">
+                      <span className={`overlay-symbol topographic-symbol topographic-symbol--${id}`} aria-hidden="true">
+                        <Icon size={16} />
+                      </span>
+                      <span className="layer-copy">
+                        <span className="layer-title">{layer.title}</span>
+                        <span className="layer-subtitle">{layer.description}</span>
+                      </span>
+                      <Switch
+                        checked={topographicVisibility[id]}
+                        onCheckedChange={(visible) => changeTopographicVisibility(id, visible)}
+                        aria-label={`${topographicVisibility[id] ? "Ocultar" : "Mostrar"} ${layer.title.toLowerCase()}`}
+                      />
+                    </div>
+                    {topographicVisibility[id] && (
+                      <label className="topographic-opacity" htmlFor={opacityId}>
+                        <span>Opacidad</span>
+                        <output htmlFor={opacityId}>{topographicOpacity[id]} %</output>
+                        <input
+                          id={opacityId}
+                          type="range"
+                          min="0"
+                          max="100"
+                          step="5"
+                          value={topographicOpacity[id]}
+                          onChange={(event) => changeTopographicOpacity(id, Number(event.currentTarget.value))}
+                          aria-label={`Opacidad de ${layer.title.toLowerCase()}`}
+                        />
+                      </label>
+                    )}
+                    {topographicVisibility[id] && !topographicAvailability[id] && (
+                      <p className="topographic-layer-error" role="status">Esta capa no está disponible ahora mismo.</p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {topographicVisibility.elevation && terrainCoverage && (
+              <div className="elevation-legend" aria-label="Leyenda de elevación en metros">
+                <span className="elevation-legend-title">Elevación sobre EGM2008 (m)</span>
+                <div className="elevation-legend-gradient" aria-hidden="true" />
+                <div className="elevation-legend-values">
+                  <span>{Math.round(terrainCoverage.minElevation)} m</span>
+                  <span>{Math.round(terrainCoverage.maxElevation)} m</span>
+                </div>
+              </div>
+            )}
+            {terrainServiceState === "loading" && (
+              <p className="terrain-coverage-note" role="status">Comprobando los datos topográficos preparados…</p>
+            )}
+            {terrainServiceState === "unavailable" && (
+              <p className="terrain-coverage-note terrain-coverage-note--error" role="status">
+                El servicio de elevación no está disponible. El mapa base y las herramientas siguen funcionando.
+              </p>
+            )}
+            {terrainServiceState === "available" && terrainCoverage && mapExtent && (
+              extentsIntersect(mapExtent, terrainCoverage.extent) ? (
+                <p className="terrain-coverage-note" role="status">
+                  Datos preparados en {terrainCoverage.areaName}. El resto del territorio no tiene cobertura en este volumen.
+                </p>
+              ) : (
+                <p className="terrain-coverage-note terrain-coverage-note--empty" role="status">
+                  Sin datos topográficos preparados en esta zona. El área transparente no representa una elevación de 0 m; la cobertura disponible está en {terrainCoverage.areaName}.
+                </p>
+              )
+            )}
+            <div className="copernicus-notice">
+              <span>© DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.</span>
+              <span>Produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.</span>
+              <span>The organisations in charge of the Copernicus programme by law or by delegation do not incur any liability for any use of the Copernicus WorldDEM-30.</span>
+              <a href="https://dataspace.copernicus.eu/sites/default/files/media/files/2025-06/copernicus_contributing_mission_data_access_v2_cop_dem_licenses.pdf" target="_blank" rel="noreferrer">Licencia de Copernicus DEM</a>
+            </div>
+          </section>
+
           <DrawnElementsList
             elements={drawingTools.elements}
             selectedIds={drawingTools.selectedIds}
@@ -378,6 +529,7 @@ export default function App() {
             onStatusChange={handleMapStatus}
             onQgisStatusChange={handleQgisStatusChange}
             onOverlayAvailabilityChange={handleOverlayAvailabilityChange}
+            onTopographicAvailabilityChange={handleTopographicAvailabilityChange}
             onMapReady={drawingTools.connectMap}
             onCenterChange={handleMapCenterChange}
           />

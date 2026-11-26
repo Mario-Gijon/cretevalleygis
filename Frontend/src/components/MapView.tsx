@@ -3,7 +3,7 @@ import type Feature from "ol/Feature.js";
 import type Map from "ol/Map.js";
 import Attribution from "ol/control/Attribution.js";
 import { defaults as defaultControls } from "ol/control/defaults.js";
-import { fromLonLat, toLonLat } from "ol/proj.js";
+import { fromLonLat, toLonLat, transformExtent } from "ol/proj.js";
 import OSM from "ol/source/OSM.js";
 import ImageWMS from "ol/source/ImageWMS.js";
 import OlMap from "ol/Map.js";
@@ -18,6 +18,11 @@ import {
   GEOGRAPHIC_OVERLAYS,
   type GeographicOverlayId,
 } from "@/lib/cartographic-layers";
+import {
+  DEFAULT_TOPOGRAPHIC_OPACITY,
+  TOPOGRAPHIC_LAYERS,
+  type TopographicLayerId,
+} from "@/lib/topographic-layers";
 import { CRETE_CENTER } from "@/lib/map-config";
 
 export type MapStatus = {
@@ -30,10 +35,12 @@ type MutableRef<T> = { current: T };
 
 export type BaseMapId = "osm" | "qgis";
 export type OverlayLayers = Record<GeographicOverlayId, ImageLayer<ImageWMS>>;
+export type TopographicLayers = Record<TopographicLayerId, ImageLayer<ImageWMS>>;
 export type BaseMapLayers = {
   osm: TileLayer<OSM>;
   qgis: ImageLayer<ImageWMS>;
   overlays: OverlayLayers;
+  topography: TopographicLayers;
 };
 export type QgisStatus = "idle" | "loading" | "available" | "error";
 
@@ -45,8 +52,9 @@ type MapViewProps = {
   onStatusChange: (status: MapStatus) => void;
   onQgisStatusChange: (status: QgisStatus) => void;
   onOverlayAvailabilityChange: (id: GeographicOverlayId, available: boolean) => void;
+  onTopographicAvailabilityChange: (id: TopographicLayerId, available: boolean) => void;
   onMapReady: (map: Map) => (() => void) | void;
-  onCenterChange: (center: [number, number]) => void;
+  onCenterChange: (center: [number, number], extent: [number, number, number, number]) => void;
 };
 
 export default function MapView({
@@ -57,6 +65,7 @@ export default function MapView({
   onStatusChange,
   onQgisStatusChange,
   onOverlayAvailabilityChange,
+  onTopographicAvailabilityChange,
   onMapReady,
   onCenterChange,
 }: MapViewProps) {
@@ -109,11 +118,38 @@ export default function MapView({
         new ImageLayer({ source, visible: ["boundaries", "localities"].includes(id) }),
       ]),
     ) as OverlayLayers;
+    const topographicSources = Object.fromEntries(
+      Object.entries(TOPOGRAPHIC_LAYERS).map(([id, layer]) => [
+        id,
+        new ImageWMS({
+          url: "/qgis/ogc/world",
+          params: {
+            LAYERS: layer.wmsLayer,
+            VERSION: "1.3.0",
+            FORMAT: "image/png",
+            TRANSPARENT: true,
+          },
+          serverType: "qgis",
+        }),
+      ]),
+    ) as Record<TopographicLayerId, ImageWMS>;
+    const topographicLayers = Object.fromEntries(
+      Object.entries(topographicSources).map(([id, source]) => {
+        const layerId = id as TopographicLayerId;
+        return [layerId, new ImageLayer({
+          source,
+          visible: false,
+          opacity: DEFAULT_TOPOGRAPHIC_OPACITY[layerId] / 100,
+        })];
+      }),
+    ) as TopographicLayers;
     const map = new OlMap({
       target: targetRef.current,
       layers: [
         osmLayer,
         qgisLayer,
+        topographicLayers.elevation,
+        topographicLayers.hillshade,
         overlayLayers.boundaries,
         overlayLayers.localities,
         overlayLayers.rivers,
@@ -210,6 +246,19 @@ export default function MapView({
       layer.on("change:visible", onVisibilityChange);
       return { id: overlayId, source, layer, onTileLoad, onTileError, onVisibilityChange };
     });
+    const topographicListeners = Object.entries(topographicSources).map(([id, source]) => {
+      const layerId = id as TopographicLayerId;
+      const layer = topographicLayers[layerId];
+      const onLoad = () => onTopographicAvailabilityChange(layerId, true);
+      const onError = () => {
+        if (layer.getVisible()) onTopographicAvailabilityChange(layerId, false);
+      };
+      const onVisibilityChange = () => {
+        if (layer.getVisible()) source.refresh();
+      };
+      layer.on("change:visible", onVisibilityChange);
+      return { id: layerId, source, layer, onLoad, onError, onVisibilityChange };
+    });
 
     osmSource.on("tileloadstart", tileStarted);
     osmSource.on("tileloadend", tileLoaded);
@@ -224,16 +273,27 @@ export default function MapView({
       source.on("imageloadend", listeners.onTileLoad);
       source.on("imageloaderror", listeners.onTileError);
     });
+    Object.entries(topographicSources).forEach(([id, source]) => {
+      const listeners = topographicListeners.find((item) => item.id === id);
+      if (!listeners) return;
+      source.on("imageloadend", listeners.onLoad);
+      source.on("imageloaderror", listeners.onError);
+    });
     map.once("rendercomplete", firstRender);
     mapRef.current = map;
-    baseLayersRef.current = { osm: osmLayer, qgis: qgisLayer, overlays: overlayLayers };
+    baseLayersRef.current = { osm: osmLayer, qgis: qgisLayer, overlays: overlayLayers, topography: topographicLayers };
     const updateCenter = () => {
       const center = map.getView().getCenter();
       if (!center) return;
       const [longitude, latitude] = toLonLat(center);
-      onCenterChange([longitude, latitude]);
+      const size = map.getSize();
+      const extent = size
+        ? transformExtent(map.getView().calculateExtent(size), "EPSG:3857", "EPSG:4326") as [number, number, number, number]
+        : [longitude, latitude, longitude, latitude] as [number, number, number, number];
+      onCenterChange([longitude, latitude], extent);
     };
     map.on("moveend", updateCenter);
+    map.on("change:size", updateCenter);
     updateCenter();
     const detachDrawingTools = onMapReady(map);
 
@@ -251,14 +311,20 @@ export default function MapView({
         source.un("imageloaderror", onTileError);
         layer.un("change:visible", onVisibilityChange);
       });
+      topographicListeners.forEach(({ source, layer, onLoad, onError, onVisibilityChange }) => {
+        source.un("imageloadend", onLoad);
+        source.un("imageloaderror", onError);
+        layer.un("change:visible", onVisibilityChange);
+      });
       map.un("rendercomplete", firstRender);
       map.un("moveend", updateCenter);
+      map.un("change:size", updateCenter);
       detachDrawingTools?.();
       map.setTarget(undefined);
       mapRef.current = null;
       baseLayersRef.current = null;
     };
-  }, [baseLayersRef, drawingsLayer, mapRef, measurementsLayer, onCenterChange, onMapReady, onOverlayAvailabilityChange, onQgisStatusChange, onStatusChange]);
+  }, [baseLayersRef, drawingsLayer, mapRef, measurementsLayer, onCenterChange, onMapReady, onOverlayAvailabilityChange, onQgisStatusChange, onStatusChange, onTopographicAvailabilityChange]);
 
   return (
     <div
