@@ -18,18 +18,27 @@ La demo QWC2 permanece disponible en <http://localhost:5176/?t=qwc_demo>. Si sol
 
 ## Mapa mundial propio
 
-El servicio ejecuta QGIS Server `3.44.16` desde la imagen oficial de QGIS, fijada por versión y digest, con límites de 1 CPU y 1 GiB de memoria. Al iniciar, el servicio auxiliar `qgis-world-data` descarga los tres shapefiles ligeros de Natural Earth a un volumen Docker, valida sus SHA-256 fijados y genera el proyecto QGIS con estilos propios. No se versionan los datasets ni archivos de proyecto generados.
+El servicio ejecuta QGIS Server `3.44.16` desde la imagen oficial de QGIS, fijada por versión y digest, con límites de 1 CPU y 1 GiB de memoria. El servicio auxiliar `qgis-world-data` prepara únicamente los 18 conjuntos necesarios de Natural Earth: tierra, países, límites, localidades, ríos y lagos para 1:110m, 1:50m y 1:10m. Cada archivo comprimido se valida con SHA-256 antes de extraerse a un volumen Docker; no se versionan los datasets ni el proyecto generado.
 
-Las capas WMS son `land`, `countries` y `boundaries`, basadas en Natural Earth 1:110m. Para preparar el proyecto manualmente se puede ejecutar el script `QGIS/scripts/prepare-world.sh` dentro de la imagen oficial. El origen, las URLs de descarga y el procedimiento de preparación están declarados en `QGIS/scripts/prepare-world.py`.
+El proyecto cambia de escala entre 1:110m, 1:50m y 1:10m, y QGIS gestiona los límites de visibilidad. Las etiquetas de países, ciudades, ríos y lagos usan la colocación anticolisión de QGIS. El WMS expone grupos de nombres por tema, por ejemplo `boundaries_110m,boundaries_50m,boundaries_10m` y `rivers_110m,rivers_50m,rivers_10m`.
+
+La preparación es incremental: reutiliza los shapefiles íntegros que ya existen, valida sus componentes y actualiza `world.qgs` de forma atómica sin borrar el volumen ni sustituir datasets previos. Para volver a ejecutar la preparación sobre el volumen actual:
+
+```bash
+docker compose run --rm --no-deps qgis-world-data
+docker compose restart qgis-server
+```
+
+El origen, las descargas seleccionadas, sus huellas SHA-256, estilos y procedimiento están declarados en `QGIS/scripts/prepare-world.py`.
 
 Pruebas directas del servicio:
 
 ```bash
 curl 'http://localhost:8085/ogc/world?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities'
-curl -o /tmp/crete-world.png 'http://localhost:8085/ogc/world?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&CRS=EPSG:3857&BBOX=-20037508,-10018754,20037508,10018754&WIDTH=1024&HEIGHT=512&LAYERS=land,countries,boundaries&STYLES=&FORMAT=image/png'
+curl -o /tmp/crete-world.png 'http://localhost:8085/ogc/world?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&CRS=EPSG:3857&BBOX=-20037508,-10018754,20037508,10018754&WIDTH=1024&HEIGHT=512&LAYERS=land_110m,land_50m,land_10m,countries_110m,countries_50m,countries_10m&STYLES=&FORMAT=image/png'
 ```
 
-Natural Earth publica los datos en dominio público; la atribución es opcional y la interfaz incluye “Made with Natural Earth”. OpenStreetMap se mantiene como mapa base alternativo y requiere atribución visible. El servidor público de teselas OSM y la descarga inicial de Natural Earth requieren Internet. Esta configuración es para desarrollo local, no para producción.
+Natural Earth publica los datos en dominio público; la atribución es opcional y la interfaz incluye “Made with Natural Earth”. OpenStreetMap se mantiene como mapa base alternativo y requiere atribución visible. La descarga inicial de conjuntos que aún no existen requiere Internet. Esta configuración es para desarrollo local, no para producción.
 
 ## Licencias
 

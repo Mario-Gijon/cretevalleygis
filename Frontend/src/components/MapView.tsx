@@ -5,13 +5,19 @@ import Attribution from "ol/control/Attribution.js";
 import { defaults as defaultControls } from "ol/control/defaults.js";
 import { fromLonLat, toLonLat } from "ol/proj.js";
 import OSM from "ol/source/OSM.js";
-import TileWMS from "ol/source/TileWMS.js";
+import ImageWMS from "ol/source/ImageWMS.js";
 import OlMap from "ol/Map.js";
 import type VectorLayer from "ol/layer/Vector.js";
 import type Geometry from "ol/geom/Geometry.js";
 import TileLayer from "ol/layer/Tile.js";
+import ImageLayer from "ol/layer/Image.js";
 import type VectorSource from "ol/source/Vector.js";
 import View from "ol/View.js";
+import {
+  BASE_MAP_WMS_LAYERS,
+  GEOGRAPHIC_OVERLAYS,
+  type GeographicOverlayId,
+} from "@/lib/cartographic-layers";
 import { CRETE_CENTER } from "@/lib/map-config";
 
 export type MapStatus = {
@@ -23,9 +29,11 @@ export type MapStatus = {
 type MutableRef<T> = { current: T };
 
 export type BaseMapId = "osm" | "qgis";
+export type OverlayLayers = Record<GeographicOverlayId, ImageLayer<ImageWMS>>;
 export type BaseMapLayers = {
   osm: TileLayer<OSM>;
-  qgis: TileLayer<TileWMS>;
+  qgis: ImageLayer<ImageWMS>;
+  overlays: OverlayLayers;
 };
 export type QgisStatus = "idle" | "loading" | "available" | "error";
 
@@ -36,6 +44,7 @@ type MapViewProps = {
   measurementsLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
   onStatusChange: (status: MapStatus) => void;
   onQgisStatusChange: (status: QgisStatus) => void;
+  onOverlayAvailabilityChange: (id: GeographicOverlayId, available: boolean) => void;
   onMapReady: (map: Map) => (() => void) | void;
   onCenterChange: (center: [number, number]) => void;
 };
@@ -47,6 +56,7 @@ export default function MapView({
   measurementsLayer,
   onStatusChange,
   onQgisStatusChange,
+  onOverlayAvailabilityChange,
   onMapReady,
   onCenterChange,
 }: MapViewProps) {
@@ -58,27 +68,59 @@ export default function MapView({
     let pendingTiles = 0;
     let mapReady = false;
     let hasTileError = false;
-    let qgisResponded = false;
     let qgisFailed = false;
+    let qgisLoadedOnce = false;
+    let initialQgisFailureTimer: ReturnType<typeof setTimeout> | undefined;
     const osmSource = new OSM();
     const osmLayer = new TileLayer({ source: osmSource });
-    const qgisSource = new TileWMS({
+    const naturalEarthAttribution = '<a href="https://www.naturalearthdata.com/" target="_blank" rel="noreferrer">Made with Natural Earth</a>';
+    const qgisSource = new ImageWMS({
       url: "/qgis/ogc/world",
       params: {
-        LAYERS: "land,countries,boundaries",
+        LAYERS: BASE_MAP_WMS_LAYERS.join(","),
         VERSION: "1.3.0",
         FORMAT: "image/png",
         TRANSPARENT: false,
         BGCOLOR: "0xe5edf0",
       },
       serverType: "qgis",
-      transition: 0,
-      attributions: '<a href="https://www.naturalearthdata.com/" target="_blank" rel="noreferrer">Made with Natural Earth</a>',
+      attributions: naturalEarthAttribution,
     });
-    const qgisLayer = new TileLayer({ source: qgisSource, visible: false });
+    const qgisLayer = new ImageLayer({ source: qgisSource, visible: false });
+    const overlaySources = Object.fromEntries(
+      Object.entries(GEOGRAPHIC_OVERLAYS).map(([id, overlay]) => [
+        id,
+        new ImageWMS({
+          url: "/qgis/ogc/world",
+          params: {
+            LAYERS: overlay.layers.join(","),
+            VERSION: "1.3.0",
+            FORMAT: "image/png",
+            TRANSPARENT: true,
+          },
+          serverType: "qgis",
+          attributions: naturalEarthAttribution,
+        }),
+      ]),
+    ) as Record<GeographicOverlayId, ImageWMS>;
+    const overlayLayers = Object.fromEntries(
+      Object.entries(overlaySources).map(([id, source]) => [
+        id,
+        new ImageLayer({ source, visible: ["boundaries", "localities"].includes(id) }),
+      ]),
+    ) as OverlayLayers;
     const map = new OlMap({
       target: targetRef.current,
-      layers: [osmLayer, qgisLayer, drawingsLayer, measurementsLayer],
+      layers: [
+        osmLayer,
+        qgisLayer,
+        overlayLayers.boundaries,
+        overlayLayers.localities,
+        overlayLayers.rivers,
+        overlayLayers.lakes,
+        drawingsLayer,
+        measurementsLayer,
+      ],
       controls: defaultControls({
         attribution: false,
         rotate: false,
@@ -116,35 +158,75 @@ export default function MapView({
     };
 
     const qgisTileStarted = () => {
-      if (!qgisFailed) onQgisStatusChange("loading");
+      if (qgisLayer.getVisible() && !qgisFailed) onQgisStatusChange("loading");
     };
     const qgisTileLoaded = () => {
-      qgisResponded = true;
-      if (!qgisFailed) onQgisStatusChange("available");
+      if (!qgisLayer.getVisible() || qgisFailed) return;
+      qgisLoadedOnce = true;
+      if (initialQgisFailureTimer) clearTimeout(initialQgisFailureTimer);
+      onQgisStatusChange("available");
     };
     const qgisTileFailed = () => {
-      if (qgisResponded || qgisFailed) return;
-      qgisFailed = true;
-      onQgisStatusChange("error");
+      if (!qgisLayer.getVisible() || qgisFailed) return;
+      if (qgisLoadedOnce) {
+        qgisFailed = true;
+        onQgisStatusChange("error");
+        return;
+      }
+      // A single failed tile may be transient. Keep OSM available while QGIS
+      // tries its other visible scale tiles, then fall back if none succeeds.
+      if (!initialQgisFailureTimer) {
+        initialQgisFailureTimer = setTimeout(() => {
+          if (!qgisLoadedOnce && qgisLayer.getVisible()) {
+            qgisFailed = true;
+            onQgisStatusChange("error");
+          }
+        }, 1200);
+      }
     };
     const qgisVisibilityChanged = () => {
       if (!qgisLayer.getVisible()) return;
-      qgisResponded = false;
       qgisFailed = false;
+      qgisLoadedOnce = false;
+      if (initialQgisFailureTimer) clearTimeout(initialQgisFailureTimer);
+      initialQgisFailureTimer = undefined;
       onQgisStatusChange("loading");
       qgisSource.refresh();
+      Object.entries(overlayLayers).forEach(([id, layer]) => {
+        if (layer.getVisible()) overlaySources[id as GeographicOverlayId].refresh();
+      });
     };
+    const overlayListeners = Object.entries(overlaySources).map(([id, source]) => {
+      const overlayId = id as GeographicOverlayId;
+      const layer = overlayLayers[overlayId];
+      const onTileLoad = () => onOverlayAvailabilityChange(overlayId, true);
+      const onTileError = () => {
+        if (layer.getVisible()) onOverlayAvailabilityChange(overlayId, false);
+      };
+      const onVisibilityChange = () => {
+        if (layer.getVisible()) source.refresh();
+        else onOverlayAvailabilityChange(overlayId, true);
+      };
+      layer.on("change:visible", onVisibilityChange);
+      return { id: overlayId, source, layer, onTileLoad, onTileError, onVisibilityChange };
+    });
 
     osmSource.on("tileloadstart", tileStarted);
     osmSource.on("tileloadend", tileLoaded);
     osmSource.on("tileloaderror", tileFailed);
-    qgisSource.on("tileloadstart", qgisTileStarted);
-    qgisSource.on("tileloadend", qgisTileLoaded);
-    qgisSource.on("tileloaderror", qgisTileFailed);
+    qgisSource.on("imageloadstart", qgisTileStarted);
+    qgisSource.on("imageloadend", qgisTileLoaded);
+    qgisSource.on("imageloaderror", qgisTileFailed);
     qgisLayer.on("change:visible", qgisVisibilityChanged);
+    Object.entries(overlaySources).forEach(([id, source]) => {
+      const listeners = overlayListeners.find((item) => item.id === id);
+      if (!listeners) return;
+      source.on("imageloadend", listeners.onTileLoad);
+      source.on("imageloaderror", listeners.onTileError);
+    });
     map.once("rendercomplete", firstRender);
     mapRef.current = map;
-    baseLayersRef.current = { osm: osmLayer, qgis: qgisLayer };
+    baseLayersRef.current = { osm: osmLayer, qgis: qgisLayer, overlays: overlayLayers };
     const updateCenter = () => {
       const center = map.getView().getCenter();
       if (!center) return;
@@ -159,10 +241,16 @@ export default function MapView({
       osmSource.un("tileloadstart", tileStarted);
       osmSource.un("tileloadend", tileLoaded);
       osmSource.un("tileloaderror", tileFailed);
-      qgisSource.un("tileloadstart", qgisTileStarted);
-      qgisSource.un("tileloadend", qgisTileLoaded);
-      qgisSource.un("tileloaderror", qgisTileFailed);
+      qgisSource.un("imageloadstart", qgisTileStarted);
+      qgisSource.un("imageloadend", qgisTileLoaded);
+      qgisSource.un("imageloaderror", qgisTileFailed);
       qgisLayer.un("change:visible", qgisVisibilityChanged);
+      if (initialQgisFailureTimer) clearTimeout(initialQgisFailureTimer);
+      overlayListeners.forEach(({ source, layer, onTileLoad, onTileError, onVisibilityChange }) => {
+        source.un("imageloadend", onTileLoad);
+        source.un("imageloaderror", onTileError);
+        layer.un("change:visible", onVisibilityChange);
+      });
       map.un("rendercomplete", firstRender);
       map.un("moveend", updateCenter);
       detachDrawingTools?.();
@@ -170,7 +258,7 @@ export default function MapView({
       mapRef.current = null;
       baseLayersRef.current = null;
     };
-  }, [baseLayersRef, drawingsLayer, mapRef, measurementsLayer, onCenterChange, onMapReady, onQgisStatusChange, onStatusChange]);
+  }, [baseLayersRef, drawingsLayer, mapRef, measurementsLayer, onCenterChange, onMapReady, onOverlayAvailabilityChange, onQgisStatusChange, onStatusChange]);
 
   return (
     <div

@@ -435,6 +435,60 @@ button {
   gap: 8px;
 }
 
+.thematic-layer-section {
+  margin-top: 24px;
+}
+
+.overlay-intro {
+  margin: -2px 0 9px 3px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.overlay-layer-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.overlay-layer-row {
+  display: flex;
+  min-height: 49px;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 3px;
+  border-bottom: 1px solid var(--border);
+}
+
+.overlay-layer-row:last-child {
+  border-bottom: 0;
+}
+
+.overlay-symbol {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--cv-blue);
+}
+
+.overlay-symbol--rivers,
+.overlay-symbol--lakes {
+  color: #318caa;
+}
+
+.app-shell[data-theme="dark"] .overlay-symbol {
+  color: #75d7d5;
+}
+
+.app-shell[data-theme="dark"] .overlay-symbol--rivers,
+.app-shell[data-theme="dark"] .overlay-symbol--lakes {
+  color: #77cce0;
+}
+
 .base-map-option {
   display: flex;
   align-items: center;

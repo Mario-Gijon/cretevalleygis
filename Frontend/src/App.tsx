@@ -3,16 +3,20 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import {
   Check,
   CornerUpLeft,
+  Droplets,
   Layers,
+  MapPinned,
   LoaderCircle,
   Map,
   MapPin,
   Minus,
   Moon,
+  ScanLine,
   PanelLeftClose,
   Plus,
   Play,
   Sun,
+  Waves,
   X,
 } from "lucide-react";
 import { fromLonLat } from "ol/proj.js";
@@ -22,9 +26,16 @@ import { DrawnElementsList } from "@/components/DrawnElementsList";
 import { GeometryDetails } from "@/components/GeometryDetails";
 import { DrawingToolbar } from "@/components/DrawingToolbar";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { useDrawingTools } from "@/hooks/useDrawingTools";
 import { CRETE_CENTER } from "@/lib/map-config";
 import { formatCoordinate } from "@/lib/geometry-metrics";
+import {
+  DEFAULT_OVERLAY_VISIBILITY,
+  GEOGRAPHIC_OVERLAYS,
+  type GeographicOverlayId,
+  type GeographicOverlayVisibility,
+} from "@/lib/cartographic-layers";
 
 type ThemeMode = "light" | "dark";
 
@@ -41,13 +52,19 @@ export default function App() {
   const traceMenuRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<OlMap | null>(null);
   const baseLayersRef = useRef<BaseMapLayers | null>(null);
-  const qgisInitialViewAppliedRef = useRef(false);
   const drawingTools = useDrawingTools();
   const [theme, setTheme] = useState<ThemeMode>(initialTheme);
   const [panelOpen, setPanelOpen] = useState(
     () => !window.matchMedia("(max-width: 720px)").matches,
   );
   const [baseMap, setBaseMap] = useState<BaseMapId>("osm");
+  const [overlayVisibility, setOverlayVisibility] = useState<GeographicOverlayVisibility>(DEFAULT_OVERLAY_VISIBILITY);
+  const [overlayAvailability, setOverlayAvailability] = useState<Record<GeographicOverlayId, boolean>>({
+    boundaries: true,
+    localities: true,
+    rivers: true,
+    lakes: true,
+  });
   const [qgisStatus, setQgisStatus] = useState<QgisStatus>("idle");
   const [mapStatus, setMapStatus] = useState<MapStatus>({
     ready: false,
@@ -83,19 +100,20 @@ export default function App() {
   };
 
   const changeBaseMap = (next: BaseMapId) => {
-    if (next === "qgis" && !qgisInitialViewAppliedRef.current) {
-      mapRef.current?.getView().animate({
-        center: fromLonLat([0, 0]),
-        zoom: 2,
-        duration: 240,
-      });
-      qgisInitialViewAppliedRef.current = true;
-    }
     baseLayersRef.current?.osm.setVisible(next === "osm");
     baseLayersRef.current?.qgis.setVisible(next === "qgis");
     setBaseMap(next);
     if (next === "qgis") setQgisStatus("loading");
   };
+
+  const changeOverlayVisibility = (id: GeographicOverlayId, visible: boolean) => {
+    baseLayersRef.current?.overlays[id].setVisible(visible);
+    setOverlayVisibility((current) => ({ ...current, [id]: visible }));
+  };
+
+  const handleOverlayAvailabilityChange = useCallback((id: GeographicOverlayId, available: boolean) => {
+    setOverlayAvailability((current) => current[id] === available ? current : { ...current, [id]: available });
+  }, []);
 
   const changeZoom = (amount: number) => {
     const view = mapRef.current?.getView();
@@ -284,11 +302,42 @@ export default function App() {
                 <span className="layer-copy">
                   <span className="layer-title">Crete Valley GIS</span>
                   <span className="layer-subtitle">
-                    {qgisStatus === "available" ? "Cartografía propia activa" : qgisStatus === "error" ? "Servicio no disponible" : "Mapa mundial · Natural Earth"}
+                    {qgisStatus === "available" ? "Cartografía propia · Natural Earth" : qgisStatus === "error" ? "Servicio no disponible" : "Mapa mundial · Natural Earth"}
                   </span>
                 </span>
                 <span className={`base-map-indicator ${baseMap === "qgis" ? "base-map-indicator--active" : ""}`} aria-hidden="true" />
               </button>
+            </div>
+          </section>
+
+          <section className="layer-section thematic-layer-section" aria-labelledby="geographic-layers-title">
+            <h2 className="eyebrow" id="geographic-layers-title">CAPAS GEOGRÁFICAS</h2>
+            <p className="overlay-intro">Añade información al mapa sin cambiar su vista.</p>
+            <div className="overlay-layer-list">
+              {([
+                ["boundaries", ScanLine],
+                ["localities", MapPinned],
+                ["rivers", Waves],
+                ["lakes", Droplets],
+              ] as const).map(([id, Icon]) => {
+                const layer = GEOGRAPHIC_OVERLAYS[id];
+                return (
+                  <div className="overlay-layer-row" key={id}>
+                    <span className={`overlay-symbol overlay-symbol--${id}`} aria-hidden="true"><Icon size={16} /></span>
+                    <span className="layer-copy">
+                      <span className="layer-title">{layer.title}</span>
+                      <span className="layer-subtitle">
+                        {overlayAvailability[id] ? layer.description : "No disponible en este momento"}
+                      </span>
+                    </span>
+                    <Switch
+                      checked={overlayVisibility[id]}
+                      onCheckedChange={(visible) => changeOverlayVisibility(id, visible)}
+                      aria-label={`${overlayVisibility[id] ? "Ocultar" : "Mostrar"} ${layer.title.toLowerCase()}`}
+                    />
+                  </div>
+                );
+              })}
             </div>
           </section>
 
@@ -328,6 +377,7 @@ export default function App() {
             measurementsLayer={drawingTools.measurementLayer}
             onStatusChange={handleMapStatus}
             onQgisStatusChange={handleQgisStatusChange}
+            onOverlayAvailabilityChange={handleOverlayAvailabilityChange}
             onMapReady={drawingTools.connectMap}
             onCenterChange={handleMapCenterChange}
           />
