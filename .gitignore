@@ -7,3 +7,5 @@ prod/
 dist/
 .vite/
 **/.DS_Store
+# Natural Earth source data and generated QGIS project are kept in a Docker volume.
+QGIS/data/

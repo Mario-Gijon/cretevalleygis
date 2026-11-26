@@ -429,15 +429,46 @@ button {
   color: var(--cv-blue);
 }
 
-.layer-row {
+.base-map-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.base-map-option {
   display: flex;
   align-items: center;
   gap: 11px;
+  width: 100%;
   min-height: 65px;
   padding: 10px 9px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.base-map-option:hover {
+  border-color: var(--border-strong);
+}
+
+.base-map-option[aria-checked="true"] {
+  border-color: color-mix(in srgb, var(--cv-blue) 40%, var(--border));
+  background: color-mix(in srgb, var(--cv-blue) 5%, var(--surface-raised));
+}
+
+.base-map-option:focus-visible {
+  outline: 2px solid var(--cv-teal);
+  outline-offset: 2px;
+}
+
+.app-shell[data-theme="dark"] .base-map-option[aria-checked="true"] {
+  border-color: color-mix(in srgb, #75d7d5 48%, var(--border));
+  background: color-mix(in srgb, #75d7d5 7%, var(--surface-raised));
 }
 
 .layer-symbol {
@@ -475,6 +506,22 @@ button {
 .layer-subtitle {
   color: var(--muted);
   font-size: 10px;
+}
+
+.base-map-indicator {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+}
+
+.base-map-indicator--active {
+  border: 4px solid var(--cv-blue);
+}
+
+.app-shell[data-theme="dark"] .base-map-indicator--active {
+  border-color: #75d7d5;
 }
 
 .layer-switch {
@@ -826,23 +873,6 @@ button {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
-}
-
-.map-empty-state {
-  position: absolute;
-  z-index: 1;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background: rgb(242 245 248 / 70%);
-  color: #42576b;
-  font-size: 13px;
-  pointer-events: none;
-}
-
-.app-shell[data-theme="dark"] .map-empty-state {
-  background: rgb(11 27 42 / 75%);
-  color: #d5e1ea;
 }
 
 .ol-attribution {

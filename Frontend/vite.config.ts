@@ -17,5 +17,12 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 5177,
     strictPort: true,
+    proxy: {
+      "/qgis": {
+        target: process.env.QGIS_SERVER_PROXY_TARGET ?? "http://127.0.0.1:8085",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/qgis/, ""),
+      },
+    },
   },
 });

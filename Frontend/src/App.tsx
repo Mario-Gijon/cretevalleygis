@@ -17,14 +17,11 @@ import {
 } from "lucide-react";
 import { fromLonLat } from "ol/proj.js";
 import type OlMap from "ol/Map.js";
-import OSM from "ol/source/OSM.js";
-import TileLayer from "ol/layer/Tile.js";
-import MapView, { type MapStatus } from "@/components/MapView";
+import MapView, { type BaseMapId, type BaseMapLayers, type MapStatus, type QgisStatus } from "@/components/MapView";
 import { DrawnElementsList } from "@/components/DrawnElementsList";
 import { GeometryDetails } from "@/components/GeometryDetails";
 import { DrawingToolbar } from "@/components/DrawingToolbar";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import { useDrawingTools } from "@/hooks/useDrawingTools";
 import { CRETE_CENTER } from "@/lib/map-config";
 import { formatCoordinate } from "@/lib/geometry-metrics";
@@ -43,13 +40,15 @@ export default function App() {
   const mapStageRef = useRef<HTMLElement | null>(null);
   const traceMenuRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<OlMap | null>(null);
-  const baseLayerRef = useRef<TileLayer<OSM> | null>(null);
+  const baseLayersRef = useRef<BaseMapLayers | null>(null);
+  const qgisInitialViewAppliedRef = useRef(false);
   const drawingTools = useDrawingTools();
   const [theme, setTheme] = useState<ThemeMode>(initialTheme);
   const [panelOpen, setPanelOpen] = useState(
     () => !window.matchMedia("(max-width: 720px)").matches,
   );
-  const [layerVisible, setLayerVisible] = useState(true);
+  const [baseMap, setBaseMap] = useState<BaseMapId>("osm");
+  const [qgisStatus, setQgisStatus] = useState<QgisStatus>("idle");
   const [mapStatus, setMapStatus] = useState<MapStatus>({
     ready: false,
     loading: true,
@@ -65,6 +64,14 @@ export default function App() {
     setMapCenter(center);
   }, []);
 
+  const handleQgisStatusChange = useCallback((status: QgisStatus) => {
+    setQgisStatus(status);
+    if (status !== "error") return;
+    baseLayersRef.current?.qgis.setVisible(false);
+    baseLayersRef.current?.osm.setVisible(true);
+    setBaseMap("osm");
+  }, []);
+
   const changeTheme = () => {
     const nextTheme = theme === "light" ? "dark" : "light";
     setTheme(nextTheme);
@@ -75,9 +82,19 @@ export default function App() {
     }
   };
 
-  const changeLayerVisibility = (visible: boolean) => {
-    baseLayerRef.current?.setVisible(visible);
-    setLayerVisible(visible);
+  const changeBaseMap = (next: BaseMapId) => {
+    if (next === "qgis" && !qgisInitialViewAppliedRef.current) {
+      mapRef.current?.getView().animate({
+        center: fromLonLat([0, 0]),
+        zoom: 2,
+        duration: 240,
+      });
+      qgisInitialViewAppliedRef.current = true;
+    }
+    baseLayersRef.current?.osm.setVisible(next === "osm");
+    baseLayersRef.current?.qgis.setVisible(next === "qgis");
+    setBaseMap(next);
+    if (next === "qgis") setQgisStatus("loading");
   };
 
   const changeZoom = (amount: number) => {
@@ -241,19 +258,37 @@ export default function App() {
           </div>
           <section className="layer-section" aria-labelledby="base-layers-title">
             <h2 className="eyebrow" id="base-layers-title">CAPA BASE</h2>
-            <div className="layer-row">
-              <div className="layer-symbol" aria-hidden="true">
-                <Map size={18} />
-              </div>
-              <div className="layer-copy">
-                <span className="layer-title">OpenStreetMap</span>
-                <span className="layer-subtitle">Calles y lugares</span>
-              </div>
-              <Switch
-                checked={layerVisible}
-                onCheckedChange={changeLayerVisibility}
-                aria-label="Mostrar capa OpenStreetMap"
-              />
+            <div className="base-map-options" role="radiogroup" aria-label="Mapa base">
+              <button
+                type="button"
+                className="base-map-option"
+                role="radio"
+                aria-checked={baseMap === "osm"}
+                onClick={() => changeBaseMap("osm")}
+              >
+                <span className="layer-symbol" aria-hidden="true"><Map size={18} /></span>
+                <span className="layer-copy">
+                  <span className="layer-title">OpenStreetMap</span>
+                  <span className="layer-subtitle">Calles y lugares</span>
+                </span>
+                <span className={`base-map-indicator ${baseMap === "osm" ? "base-map-indicator--active" : ""}`} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className="base-map-option"
+                role="radio"
+                aria-checked={baseMap === "qgis"}
+                onClick={() => changeBaseMap("qgis")}
+              >
+                <span className="layer-symbol" aria-hidden="true"><Layers size={18} /></span>
+                <span className="layer-copy">
+                  <span className="layer-title">Crete Valley GIS</span>
+                  <span className="layer-subtitle">
+                    {qgisStatus === "available" ? "Cartografía propia activa" : qgisStatus === "error" ? "Servicio no disponible" : "Mapa mundial · Natural Earth"}
+                  </span>
+                </span>
+                <span className={`base-map-indicator ${baseMap === "qgis" ? "base-map-indicator--active" : ""}`} aria-hidden="true" />
+              </button>
             </div>
           </section>
 
@@ -271,11 +306,11 @@ export default function App() {
           <div className="panel-attribution">
             <span>Fuente cartográfica</span>
             <a
-              href="https://www.openstreetmap.org/copyright"
+              href={baseMap === "osm" ? "https://www.openstreetmap.org/copyright" : "https://www.naturalearthdata.com/about/terms-of-use/"}
               target="_blank"
               rel="noreferrer"
             >
-              © OpenStreetMap contributors
+              {baseMap === "osm" ? "© OpenStreetMap contributors" : "Made with Natural Earth"}
             </a>
           </div>
         </aside>
@@ -288,10 +323,11 @@ export default function App() {
         >
           <MapView
             mapRef={mapRef}
-            baseLayerRef={baseLayerRef}
+            baseLayersRef={baseLayersRef}
             drawingsLayer={drawingTools.layer}
             measurementsLayer={drawingTools.measurementLayer}
             onStatusChange={handleMapStatus}
+            onQgisStatusChange={handleQgisStatusChange}
             onMapReady={drawingTools.connectMap}
             onCenterChange={handleMapCenterChange}
           />
@@ -406,9 +442,9 @@ export default function App() {
               No se pudieron cargar algunas teselas. Comprueba tu conexión.
             </div>
           )}
-          {!layerVisible && (
-            <div className="map-empty-state" role="status">
-              La capa base está oculta
+          {qgisStatus === "error" && (
+            <div className="map-status map-status--error qgis-unavailable-notice" role="status">
+              La cartografía QGIS no está disponible. OpenStreetMap sigue activo.
             </div>
           )}
         </section>

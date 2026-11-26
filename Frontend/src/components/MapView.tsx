@@ -5,6 +5,7 @@ import Attribution from "ol/control/Attribution.js";
 import { defaults as defaultControls } from "ol/control/defaults.js";
 import { fromLonLat, toLonLat } from "ol/proj.js";
 import OSM from "ol/source/OSM.js";
+import TileWMS from "ol/source/TileWMS.js";
 import OlMap from "ol/Map.js";
 import type VectorLayer from "ol/layer/Vector.js";
 import type Geometry from "ol/geom/Geometry.js";
@@ -21,22 +22,31 @@ export type MapStatus = {
 
 type MutableRef<T> = { current: T };
 
+export type BaseMapId = "osm" | "qgis";
+export type BaseMapLayers = {
+  osm: TileLayer<OSM>;
+  qgis: TileLayer<TileWMS>;
+};
+export type QgisStatus = "idle" | "loading" | "available" | "error";
+
 type MapViewProps = {
   mapRef: MutableRef<Map | null>;
-  baseLayerRef: MutableRef<TileLayer<OSM> | null>;
+  baseLayersRef: MutableRef<BaseMapLayers | null>;
   drawingsLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
   measurementsLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
   onStatusChange: (status: MapStatus) => void;
+  onQgisStatusChange: (status: QgisStatus) => void;
   onMapReady: (map: Map) => (() => void) | void;
   onCenterChange: (center: [number, number]) => void;
 };
 
 export default function MapView({
   mapRef,
-  baseLayerRef,
+  baseLayersRef,
   drawingsLayer,
   measurementsLayer,
   onStatusChange,
+  onQgisStatusChange,
   onMapReady,
   onCenterChange,
 }: MapViewProps) {
@@ -48,11 +58,27 @@ export default function MapView({
     let pendingTiles = 0;
     let mapReady = false;
     let hasTileError = false;
-    const source = new OSM();
-    const baseLayer = new TileLayer({ source });
+    let qgisResponded = false;
+    let qgisFailed = false;
+    const osmSource = new OSM();
+    const osmLayer = new TileLayer({ source: osmSource });
+    const qgisSource = new TileWMS({
+      url: "/qgis/ogc/world",
+      params: {
+        LAYERS: "land,countries,boundaries",
+        VERSION: "1.3.0",
+        FORMAT: "image/png",
+        TRANSPARENT: false,
+        BGCOLOR: "0xe5edf0",
+      },
+      serverType: "qgis",
+      transition: 0,
+      attributions: '<a href="https://www.naturalearthdata.com/" target="_blank" rel="noreferrer">Made with Natural Earth</a>',
+    });
+    const qgisLayer = new TileLayer({ source: qgisSource, visible: false });
     const map = new OlMap({
       target: targetRef.current,
-      layers: [baseLayer, drawingsLayer, measurementsLayer],
+      layers: [osmLayer, qgisLayer, drawingsLayer, measurementsLayer],
       controls: defaultControls({
         attribution: false,
         rotate: false,
@@ -89,12 +115,36 @@ export default function MapView({
       onStatusChange({ ready: true, loading: pendingTiles > 0, error: hasTileError });
     };
 
-    source.on("tileloadstart", tileStarted);
-    source.on("tileloadend", tileLoaded);
-    source.on("tileloaderror", tileFailed);
+    const qgisTileStarted = () => {
+      if (!qgisFailed) onQgisStatusChange("loading");
+    };
+    const qgisTileLoaded = () => {
+      qgisResponded = true;
+      if (!qgisFailed) onQgisStatusChange("available");
+    };
+    const qgisTileFailed = () => {
+      if (qgisResponded || qgisFailed) return;
+      qgisFailed = true;
+      onQgisStatusChange("error");
+    };
+    const qgisVisibilityChanged = () => {
+      if (!qgisLayer.getVisible()) return;
+      qgisResponded = false;
+      qgisFailed = false;
+      onQgisStatusChange("loading");
+      qgisSource.refresh();
+    };
+
+    osmSource.on("tileloadstart", tileStarted);
+    osmSource.on("tileloadend", tileLoaded);
+    osmSource.on("tileloaderror", tileFailed);
+    qgisSource.on("tileloadstart", qgisTileStarted);
+    qgisSource.on("tileloadend", qgisTileLoaded);
+    qgisSource.on("tileloaderror", qgisTileFailed);
+    qgisLayer.on("change:visible", qgisVisibilityChanged);
     map.once("rendercomplete", firstRender);
     mapRef.current = map;
-    baseLayerRef.current = baseLayer;
+    baseLayersRef.current = { osm: osmLayer, qgis: qgisLayer };
     const updateCenter = () => {
       const center = map.getView().getCenter();
       if (!center) return;
@@ -106,17 +156,21 @@ export default function MapView({
     const detachDrawingTools = onMapReady(map);
 
     return () => {
-      source.un("tileloadstart", tileStarted);
-      source.un("tileloadend", tileLoaded);
-      source.un("tileloaderror", tileFailed);
+      osmSource.un("tileloadstart", tileStarted);
+      osmSource.un("tileloadend", tileLoaded);
+      osmSource.un("tileloaderror", tileFailed);
+      qgisSource.un("tileloadstart", qgisTileStarted);
+      qgisSource.un("tileloadend", qgisTileLoaded);
+      qgisSource.un("tileloaderror", qgisTileFailed);
+      qgisLayer.un("change:visible", qgisVisibilityChanged);
       map.un("rendercomplete", firstRender);
       map.un("moveend", updateCenter);
       detachDrawingTools?.();
       map.setTarget(undefined);
       mapRef.current = null;
-      baseLayerRef.current = null;
+      baseLayersRef.current = null;
     };
-  }, [baseLayerRef, drawingsLayer, mapRef, measurementsLayer, onCenterChange, onMapReady, onStatusChange]);
+  }, [baseLayersRef, drawingsLayer, mapRef, measurementsLayer, onCenterChange, onMapReady, onQgisStatusChange, onStatusChange]);
 
   return (
     <div
