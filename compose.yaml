@@ -1,0 +1,8 @@
+services:
+  qwc2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:5176:5175"
+    restart: unless-stopped

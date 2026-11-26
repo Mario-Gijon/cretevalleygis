@@ -1,0 +1,7 @@
+# Local environment and runtime output
+.env
+.env.*
+!.env.example
+node_modules/
+prod/
+**/.DS_Store
