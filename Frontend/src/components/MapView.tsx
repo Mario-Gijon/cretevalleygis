@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import type Feature from "ol/Feature.js";
 import type Map from "ol/Map.js";
 import Attribution from "ol/control/Attribution.js";
+import ScaleLine from "ol/control/ScaleLine.js";
 import { defaults as defaultControls } from "ol/control/defaults.js";
 import { fromLonLat, toLonLat } from "ol/proj.js";
 import OSM from "ol/source/OSM.js";
@@ -25,6 +26,7 @@ type MapViewProps = {
   mapRef: MutableRef<Map | null>;
   baseLayerRef: MutableRef<TileLayer<OSM> | null>;
   drawingsLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
+  measurementsLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
   onStatusChange: (status: MapStatus) => void;
   onMapReady: (map: Map) => (() => void) | void;
   onCenterChange: (center: [number, number]) => void;
@@ -34,6 +36,7 @@ export default function MapView({
   mapRef,
   baseLayerRef,
   drawingsLayer,
+  measurementsLayer,
   onStatusChange,
   onMapReady,
   onCenterChange,
@@ -50,12 +53,15 @@ export default function MapView({
     const baseLayer = new TileLayer({ source });
     const map = new OlMap({
       target: targetRef.current,
-      layers: [baseLayer, drawingsLayer],
+      layers: [baseLayer, drawingsLayer, measurementsLayer],
       controls: defaultControls({
         attribution: false,
         rotate: false,
         zoom: false,
-      }).extend([new Attribution({ collapsible: false })]),
+      }).extend([
+        new Attribution({ collapsible: false }),
+        new ScaleLine({ units: "metric", bar: true, steps: 4, text: true, minWidth: 90 }),
+      ]),
       view: new View({
         center: fromLonLat([...CRETE_CENTER]),
         zoom: 7.6,
@@ -112,7 +118,7 @@ export default function MapView({
       mapRef.current = null;
       baseLayerRef.current = null;
     };
-  }, [baseLayerRef, drawingsLayer, mapRef, onCenterChange, onMapReady, onStatusChange]);
+  }, [baseLayerRef, drawingsLayer, mapRef, measurementsLayer, onCenterChange, onMapReady, onStatusChange]);
 
   return (
     <div

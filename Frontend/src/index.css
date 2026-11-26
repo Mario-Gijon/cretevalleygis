@@ -250,6 +250,78 @@ button {
   margin-top: 24px;
 }
 
+.geometry-details {
+  margin-top: 20px;
+  padding: 13px 11px 11px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface-soft);
+}
+
+.geometry-details-heading {
+  margin: 0 0 12px;
+}
+
+.geometry-name-label {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.geometry-name-input {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  outline: none;
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+}
+
+.geometry-name-input:focus-visible {
+  border-color: var(--cv-teal);
+  box-shadow: 0 0 0 2px rgb(69 197 197 / 18%);
+}
+
+.geometry-metrics-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 13px 0 0;
+}
+
+.geometry-metrics-list > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.geometry-metrics-list dt {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.geometry-metrics-list dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 580;
+  text-align: right;
+}
+
+.geometry-metrics-note {
+  margin: 11px 0 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
 .drawn-elements-heading {
   display: flex;
   align-items: center;
@@ -570,6 +642,35 @@ button {
   gap: 2px;
 }
 
+.measure-menu-wrap {
+  position: relative;
+}
+
+.measure-menu-trigger {
+  white-space: nowrap;
+}
+
+.measure-menu {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 7px);
+  left: 0;
+  display: flex;
+  min-width: 146px;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface-raised);
+  box-shadow: 0 6px 18px rgb(5 41 76 / 16%);
+}
+
+.drawing-toolbar .measure-menu-option {
+  justify-content: flex-start;
+  min-height: 35px;
+}
+
 .drawing-toolbar .drawing-tool-button,
 .drawing-toolbar .drawing-action-button {
   min-height: 36px;
@@ -611,6 +712,23 @@ button {
   line-height: 1.4;
   pointer-events: none;
   backdrop-filter: blur(10px);
+}
+
+.drawing-instruction > span {
+  display: block;
+}
+
+.measurement-readout {
+  display: block;
+  margin-top: 4px;
+  color: var(--cv-blue);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.app-shell[data-theme="dark"] .measurement-readout {
+  color: #83d7d3;
 }
 
 .map-controls .ui-button--map {
@@ -688,6 +806,28 @@ button {
   color: var(--text) !important;
   box-shadow: 0 1px 4px rgb(5 41 76 / 8%);
   font-size: 10px !important;
+}
+
+.ol-scale-bar {
+  left: 14px !important;
+  bottom: 54px !important;
+  color: var(--text);
+  font-size: 10px !important;
+}
+
+.ol-scale-bar-inner {
+  border-color: var(--text) !important;
+}
+
+.ol-scale-step-marker {
+  background: var(--text) !important;
+}
+
+.ol-scale-text {
+  border-color: var(--text) !important;
+  background: color-mix(in srgb, var(--surface-raised) 90%, transparent) !important;
+  color: var(--text) !important;
+  text-shadow: none !important;
 }
 
 .ol-attribution ul {
@@ -794,6 +934,21 @@ button {
     gap: 3px;
   }
 
+  .measure-menu-wrap {
+    width: 100%;
+  }
+
+  .measure-menu-trigger {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .measure-menu {
+    right: 0;
+    left: auto;
+    width: min(100%, 210px);
+  }
+
   .drawing-toolbar .drawing-tool-button {
     width: 100%;
     min-height: 38px;
@@ -819,6 +974,15 @@ button {
     max-width: calc(100% - 88px);
     padding: 7px 9px;
     font-size: 9px;
+  }
+
+  .measurement-readout {
+    font-size: 10px;
+  }
+
+  .ol-scale-bar {
+    left: 11px !important;
+    bottom: 104px !important;
   }
 
   .map-controls {

@@ -5,4 +5,6 @@
 - Modo claro y oscuro con el mismo mapa y controles de alto contraste. El panel pasa a superposición en pantallas pequeñas para conservar espacio cartográfico.
 - Las herramientas cartográficas forman una barra flotante compacta con icono y etiqueta; en móvil se ordena en tres columnas. El estado activo es claro y las instrucciones se muestran junto al mapa sin tapar la atribución.
 - Los elementos dibujados usan azul y turquesa, aparecen en una lista sencilla del panel y se pueden centrar desde esa lista.
+- La ficha del elemento seleccionado muestra mediciones geodésicas orientativas junto a la lista. Las herramientas de medición usan una capa temporal independiente y ofrecen una acción visible para terminar o cancelar el trazo.
+- La escala métrica y la lectura de medición se mantienen compactas en el borde inferior del mapa, también en pantallas pequeñas.
 - OpenStreetMap es la capa base de demostración. Su atribución se mantiene visible y el mapa solo solicita teselas del área que la persona está viendo.

@@ -17,11 +17,13 @@ import OSM from "ol/source/OSM.js";
 import TileLayer from "ol/layer/Tile.js";
 import MapView, { type MapStatus } from "@/components/MapView";
 import { DrawnElementsList } from "@/components/DrawnElementsList";
+import { GeometryDetails } from "@/components/GeometryDetails";
 import { DrawingToolbar } from "@/components/DrawingToolbar";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useDrawingTools } from "@/hooks/useDrawingTools";
 import { CRETE_CENTER } from "@/lib/map-config";
+import { formatCoordinate } from "@/lib/geometry-metrics";
 
 type ThemeMode = "light" | "dark";
 
@@ -91,9 +93,6 @@ export default function App() {
     drawingTools.selectElement(id);
     drawingTools.centerElement(id);
   };
-
-  const formatCoordinate = (value: number, positive: string, negative: string) =>
-    `${Math.abs(value).toFixed(2)}° ${value < 0 ? negative : positive}`;
 
   return (
     <div className="app-shell" data-theme={theme}>
@@ -190,6 +189,10 @@ export default function App() {
             selectedIds={drawingTools.selectedIds}
             onFocus={focusElement}
           />
+          <GeometryDetails
+            element={drawingTools.selectedElementInfo}
+            onRename={drawingTools.renameElement}
+          />
 
           <div className="panel-spacer" />
           <div className="panel-attribution">
@@ -209,6 +212,7 @@ export default function App() {
             mapRef={mapRef}
             baseLayerRef={baseLayerRef}
             drawingsLayer={drawingTools.layer}
+            measurementsLayer={drawingTools.measurementLayer}
             onStatusChange={handleMapStatus}
             onMapReady={drawingTools.connectMap}
             onCenterChange={handleMapCenterChange}
@@ -218,8 +222,12 @@ export default function App() {
             activeTool={drawingTools.activeTool}
             selectedCount={drawingTools.selectedIds.length}
             drawingInProgress={drawingTools.drawingInProgress}
+            measurementResult={drawingTools.measurementResult}
             onToolChange={drawingTools.setActiveTool}
             onCancel={drawingTools.cancelDrawing}
+            onClearMeasurements={drawingTools.clearMeasurements}
+            onFinishMeasurement={drawingTools.finishMeasurement}
+            canFinishMeasurement={drawingTools.canFinishMeasurement}
             onDelete={drawingTools.deleteSelected}
           />
 
