@@ -114,7 +114,7 @@ export type TerrainAnalysisResultResponse = {
 
 export type AreaAnalysisState = {
   geometryRevision: number;
-  state: "idle" | "submitting" | "running" | "tracking-error" | "completed" | "error";
+  state: "idle" | "invalidated" | "submitting" | "running" | "tracking-error" | "completed" | "error";
   stage?: string;
   message: string;
   analysisId?: string;

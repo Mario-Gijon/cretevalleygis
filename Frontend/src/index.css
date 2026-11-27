@@ -939,6 +939,609 @@ button {
   margin-top: -6px;
 }
 
+.drawn-elements-heading-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.drawn-elements-compare {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--cv-blue) 26%, var(--border));
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--cv-blue);
+  font-size: 9px;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.drawn-elements-compare:hover {
+  border-color: var(--cv-blue);
+}
+
+.app-shell[data-theme="dark"] .drawn-elements-compare {
+  color: #a9d6f0;
+}
+
+.objective-comparison-dialog {
+  width: min(1480px, calc(100vw - 36px));
+  height: min(930px, calc(100dvh - 36px));
+  max-width: none;
+  max-height: none;
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 22px 75px rgb(5 41 76 / 28%);
+}
+
+.objective-comparison-dialog::backdrop {
+  background: rgb(5 22 38 / 64%);
+  backdrop-filter: blur(3px);
+}
+
+.objective-comparison-shell {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.objective-comparison-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.objective-comparison-header .eyebrow {
+  margin: 0 0 4px;
+}
+
+.objective-comparison-header h2 {
+  margin: 0;
+  color: var(--cv-navy);
+  font-size: 18px;
+  font-weight: 680;
+  letter-spacing: -0.03em;
+}
+
+.app-shell[data-theme="dark"] .objective-comparison-header h2 {
+  color: var(--text);
+}
+
+.objective-comparison-header p:last-child {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.objective-comparison-content {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: minmax(260px, 310px) minmax(0, 1fr);
+}
+
+.objective-comparison-controls {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--surface-soft);
+}
+
+.comparison-control-section {
+  min-width: 0;
+  padding: 13px 15px;
+  border-bottom: 1px solid var(--border);
+}
+
+.comparison-control-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.comparison-control-heading h3,
+.objective-matrix-heading h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.comparison-control-heading p,
+.objective-matrix-heading p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.comparison-control-heading > span {
+  display: grid;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  place-items: center;
+  border-radius: 99px;
+  background: var(--accent-soft);
+  color: var(--cv-blue);
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.app-shell[data-theme="dark"] .comparison-control-heading > span {
+  color: #a9d6f0;
+}
+
+.comparison-area-list {
+  display: grid;
+  max-height: 190px;
+  gap: 5px;
+  margin: 10px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.comparison-area-option {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 7px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.comparison-area-option > label {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.comparison-area-option input,
+.comparison-criterion-option input {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 1px 0 0;
+  accent-color: var(--cv-blue);
+}
+
+.comparison-area-option__copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.comparison-area-option__copy > strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comparison-status {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 560;
+  line-height: 1.35;
+}
+
+.comparison-status--available {
+  color: #25846d;
+}
+
+.comparison-status--running {
+  color: var(--cv-blue);
+}
+
+.comparison-status--invalidated,
+.comparison-status--insufficient_data {
+  color: #9a6a25;
+}
+
+.comparison-status--error {
+  color: #b04f48;
+}
+
+.app-shell[data-theme="dark"] .comparison-status--available {
+  color: #77caaa;
+}
+
+.app-shell[data-theme="dark"] .comparison-status--running {
+  color: #9ac9e8;
+}
+
+.app-shell[data-theme="dark"] .comparison-status--invalidated,
+.app-shell[data-theme="dark"] .comparison-status--insufficient_data {
+  color: #e7be78;
+}
+
+.app-shell[data-theme="dark"] .comparison-status--error {
+  color: #e89b94;
+}
+
+.comparison-area-open {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--cv-blue);
+  cursor: pointer;
+}
+
+.comparison-area-open:hover {
+  background: var(--accent-soft);
+}
+
+.comparison-criteria-section {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  border-bottom: 0;
+  overflow: hidden;
+}
+
+.comparison-criteria-actions,
+.comparison-criterion-group__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.comparison-criteria-actions {
+  margin: 9px 0 7px;
+}
+
+.comparison-criteria-actions button,
+.comparison-criterion-group__actions button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--cv-blue);
+  font-size: 9px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.app-shell[data-theme="dark"] .comparison-criteria-actions button,
+.app-shell[data-theme="dark"] .comparison-criterion-group__actions button {
+  color: #a9d6f0;
+}
+
+.comparison-criteria-groups {
+  min-height: 0;
+  flex: 1;
+  padding-right: 2px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.comparison-criterion-group {
+  padding: 0 0 8px;
+  border-top: 1px solid var(--border);
+}
+
+.comparison-criterion-group > summary {
+  display: flex;
+  min-height: 31px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 680;
+  cursor: pointer;
+  list-style: none;
+}
+
+.comparison-criterion-group > summary::-webkit-details-marker,
+.comparison-criterion-group > summary::marker {
+  display: none;
+  content: "";
+}
+
+.comparison-criterion-group > summary::after {
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  content: "";
+  transform: rotate(45deg) translateY(-2px);
+}
+
+.comparison-criterion-group[open] > summary::after {
+  transform: rotate(225deg) translate(-1px, -1px);
+}
+
+.comparison-criterion-group > summary small {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 560;
+}
+
+.comparison-criterion-group__actions {
+  margin: -1px 0 5px 22px;
+}
+
+.comparison-criterion-option {
+  display: flex;
+  min-height: 27px;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 4px 2px;
+  color: var(--text);
+  font-size: 9px;
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+.objective-comparison-matrix {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  padding: 15px 17px 11px;
+}
+
+.objective-matrix-heading {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.objective-matrix-heading > span {
+  align-self: center;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.comparison-quality-alerts {
+  display: flex;
+  max-height: 110px;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0 0 9px;
+  padding: 8px 10px;
+  overflow-y: auto;
+  border: 1px solid color-mix(in srgb, #c98228 38%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, #f0bd72 10%, var(--surface));
+  color: #714915;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.comparison-quality-alerts > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.comparison-quality-alerts ul {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 14px;
+}
+
+.app-shell[data-theme="dark"] .comparison-quality-alerts {
+  color: #f0cf9d;
+}
+
+.objective-matrix-scroll {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  overscroll-behavior: contain;
+}
+
+.objective-comparison-empty {
+  display: grid;
+  min-height: 100%;
+  padding: 24px;
+  place-items: center;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.objective-comparison-empty p {
+  max-width: 320px;
+  line-height: 1.5;
+}
+
+.objective-matrix-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 10px;
+}
+
+.objective-matrix-table thead th {
+  position: sticky;
+  z-index: 3;
+  top: 0;
+  min-width: 176px;
+  padding: 10px 11px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 650;
+  text-align: left;
+  vertical-align: top;
+}
+
+.objective-matrix-table thead th:first-child {
+  z-index: 5;
+  left: 0;
+  min-width: 210px;
+}
+
+.objective-matrix-area-name {
+  display: block;
+  margin-bottom: 5px;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.objective-matrix-table tbody > tr:not(.objective-matrix-category-row) > th {
+  position: sticky;
+  z-index: 1;
+  left: 0;
+  width: 210px;
+  min-width: 210px;
+  padding: 8px 11px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 9px;
+  font-weight: 620;
+  text-align: left;
+}
+
+.objective-matrix-table tbody > tr:not(.objective-matrix-category-row) > th span {
+  display: block;
+  line-height: 1.35;
+}
+
+.objective-matrix-table tbody > tr:not(.objective-matrix-category-row) > th small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 500;
+}
+
+.objective-matrix-table td {
+  min-width: 176px;
+  padding: 8px 11px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  vertical-align: top;
+}
+
+.objective-matrix-category-row th {
+  padding: 7px 11px;
+  border-bottom: 1px solid var(--border);
+  background: var(--accent-soft);
+  color: var(--cv-blue);
+  font-size: 9px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.app-shell[data-theme="dark"] .objective-matrix-category-row th {
+  color: #a9d6f0;
+}
+
+.objective-matrix-value {
+  display: block;
+  color: var(--text);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 620;
+  line-height: 1.4;
+}
+
+.objective-matrix-cell--pending .objective-matrix-value,
+.objective-matrix-cell--running .objective-matrix-value,
+.objective-matrix-cell--invalidated .objective-matrix-value,
+.objective-matrix-cell--insufficient_data .objective-matrix-value,
+.objective-matrix-cell--error .objective-matrix-value {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 520;
+}
+
+.objective-matrix-cell--invalidated .objective-matrix-value,
+.objective-matrix-cell--insufficient_data .objective-matrix-value {
+  color: #9a6a25;
+}
+
+.objective-matrix-cell--error .objective-matrix-value {
+  color: #b04f48;
+}
+
+.objective-matrix-quality {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.3;
+}
+
+.objective-matrix-quality--low {
+  color: #9a6a25;
+  font-weight: 620;
+}
+
+.app-shell[data-theme="dark"] .objective-matrix-quality--low {
+  color: #e7be78;
+}
+
+.objective-comparison-footnote {
+  flex: 0 0 auto;
+  margin: 8px 1px 0;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
 .drawn-elements-heading {
   display: flex;
   align-items: center;
@@ -2723,6 +3326,100 @@ button {
     top: 56px;
     right: 10px;
     max-width: calc(100% - 20px);
+  }
+}
+
+@media (max-width: 720px) {
+  .objective-comparison-dialog {
+    width: 100vw;
+    height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .objective-comparison-header {
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .objective-comparison-header h2 {
+    font-size: 15px;
+  }
+
+  .objective-comparison-content {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(190px, 40dvh) minmax(0, 1fr);
+  }
+
+  .objective-comparison-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .comparison-control-section {
+    min-height: 0;
+    padding: 9px 10px;
+    overflow: hidden;
+  }
+
+  .comparison-control-section:first-child {
+    overflow-y: auto;
+  }
+
+  .comparison-criteria-section {
+    border-bottom: 0;
+    border-left: 1px solid var(--border);
+  }
+
+  .comparison-area-list {
+    max-height: none;
+  }
+
+  .comparison-criteria-groups {
+    overflow-y: auto;
+  }
+
+  .objective-comparison-matrix {
+    padding: 9px 10px 8px;
+  }
+
+  .objective-matrix-table thead th:first-child,
+  .objective-matrix-table tbody > tr:not(.objective-matrix-category-row) > th {
+    width: 164px;
+    min-width: 164px;
+  }
+
+  .objective-matrix-table thead th,
+  .objective-matrix-table td {
+    min-width: 150px;
+    padding: 8px;
+  }
+
+  .objective-comparison-footnote {
+    font-size: 7px;
+  }
+}
+
+@media (max-width: 380px) {
+  .objective-comparison-controls {
+    grid-template-columns: minmax(0, 0.72fr) minmax(0, 1.28fr);
+  }
+
+  .comparison-area-option {
+    padding: 6px 4px;
+  }
+
+  .comparison-area-open {
+    width: 22px;
+    height: 24px;
+  }
+
+  .objective-matrix-table thead th:first-child,
+  .objective-matrix-table tbody > tr:not(.objective-matrix-category-row) > th {
+    width: 148px;
+    min-width: 148px;
   }
 }
 

@@ -47,7 +47,7 @@ function formatMeters(value: number | null | undefined): string {
   return number === "Sin datos" ? number : `${number} m`;
 }
 
-function warningText(warning: string): string {
+export function formatTerrainAnalysisWarning(warning: string): string {
   const lowCoverage = warning.match(/(elevation|slope|aspect): Valid \1 coverage of the polygon area is ([\d.]+)%, below/i);
   if (lowCoverage) {
     const variable = lowCoverage[1].toLowerCase() === "elevation"
@@ -105,7 +105,7 @@ function Results({ result }: { result: TerrainAnalysisResultResponse }) {
   const slopeMean = statistics.slope.statistics?.mean;
   const maximumRelief = statistics.elevation.statistics?.maximum_relief_m ?? statistics.elevation.statistics?.range;
   const gentleSlope = statistics.slope.distribution?.categories.find((category) => category.id === "slope-0-5");
-  const warnings = statistics.warnings.map(warningText);
+  const warnings = statistics.warnings.map(formatTerrainAnalysisWarning);
   const coverageWarnings = warnings.filter((warning) => /cobertura válida/i.test(warning));
 
   return (
@@ -227,7 +227,7 @@ function Results({ result }: { result: TerrainAnalysisResultResponse }) {
 
 export function TerrainAnalysisPanel({ analysis, onAnalyze, onResume }: TerrainAnalysisPanelProps) {
   const busy = analysis?.state === "submitting" || analysis?.state === "running";
-  const canAnalyze = !analysis || analysis.state === "idle" || (analysis.state === "error" && analysis.retryMode === "submit");
+  const canAnalyze = !analysis || analysis.state === "idle" || analysis.state === "invalidated" || (analysis.state === "error" && analysis.retryMode === "submit");
   const canResume = analysis?.state === "tracking-error" && analysis.retryMode === "resume";
 
   return (
@@ -251,7 +251,7 @@ export function TerrainAnalysisPanel({ analysis, onAnalyze, onResume }: TerrainA
         </div>
       )}
 
-      {analysis?.state === "idle" && analysis.message && <p className="area-analysis-message">{analysis.message}</p>}
+      {(analysis?.state === "idle" || analysis?.state === "invalidated") && analysis.message && <p className="area-analysis-message">{analysis.message}</p>}
       {analysis?.state === "error" && (
         <div className="analysis-notice analysis-notice--warning" role="alert">
           <AlertCircle size={15} aria-hidden="true" /><span>{analysis.message}</span>

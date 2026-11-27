@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Ellipsis, MapPin, Pencil, Pentagon, Route, Trash2, X } from "lucide-react";
+import { Check, Ellipsis, MapPin, Pencil, Pentagon, Route, Scale, Trash2, X } from "lucide-react";
 import type { DrawnElement } from "@/hooks/useDrawingTools";
 import { formatArea, formatCoordinate, formatDistance } from "@/lib/geometry-metrics";
 
@@ -9,6 +9,7 @@ type DrawnElementsListProps = {
   onFocus: (id: string) => void;
   onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
+  onCompare: () => void;
 };
 
 const geometryLabels = {
@@ -17,9 +18,10 @@ const geometryLabels = {
   Polygon: "Área",
 } as const;
 
-export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, onDelete }: DrawnElementsListProps) {
+export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, onDelete, onCompare }: DrawnElementsListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
+  const polygonCount = elements.filter((element) => element.geometryType === "Polygon").length;
 
   return (
     <section className="drawn-elements-section" aria-labelledby="drawn-elements-title">
@@ -28,7 +30,14 @@ export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, on
           <h2 className="eyebrow" id="drawn-elements-title">ÁREAS Y ELEMENTOS</h2>
           <p className="drawn-elements-caption">Selecciona uno para consultar sus propiedades.</p>
         </div>
-        <span className="drawn-elements-count" aria-label={`${elements.length} elementos`}>{elements.length}</span>
+        <div className="drawn-elements-heading-actions">
+          {polygonCount >= 2 && (
+            <button type="button" className="drawn-elements-compare" onClick={onCompare}>
+              <Scale size={14} aria-hidden="true" /> Comparar áreas
+            </button>
+          )}
+          <span className="drawn-elements-count" aria-label={`${elements.length} elementos`}>{elements.length}</span>
+        </div>
       </div>
       {elements.length === 0 ? (
         <p className="drawn-elements-empty">Dibuja un punto, una línea o un área para empezar.</p>

@@ -143,7 +143,7 @@ export function useTerrainAnalysis() {
       if (next[areaId]) {
         next[areaId] = {
           geometryRevision: revision,
-          state: "idle",
+          state: "invalidated",
           message: "La geometría ha cambiado. Analiza de nuevo esta área para actualizar sus resultados.",
         };
         changed = true;

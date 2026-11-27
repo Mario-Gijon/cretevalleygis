@@ -36,11 +36,13 @@ import {
 } from "@/lib/base-maps";
 import { DrawnElementsList } from "@/components/DrawnElementsList";
 import { GeometryDetails } from "@/components/GeometryDetails";
+import { ObjectiveAreaComparison } from "@/components/ObjectiveAreaComparison";
 import { DrawingToolbar } from "@/components/DrawingToolbar";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useDrawingTools } from "@/hooks/useDrawingTools";
 import { useTerrainAnalysis } from "@/hooks/useTerrainAnalysis";
+import { OBJECTIVE_CRITERIA } from "@/lib/objective-criteria";
 import { CRETE_CENTER } from "@/lib/map-config";
 import { formatCoordinate } from "@/lib/geometry-metrics";
 import {
@@ -149,6 +151,9 @@ export default function App() {
   );
   const [panelTab, setPanelTab] = useState<PanelTab>("layers");
   const [areaPanelView, setAreaPanelView] = useState<AreaPanelView>("list");
+  const [comparisonOpen, setComparisonOpen] = useState(false);
+  const [comparisonAreaIds, setComparisonAreaIds] = useState<string[] | null>(null);
+  const [comparisonCriterionIds, setComparisonCriterionIds] = useState(() => OBJECTIVE_CRITERIA.map((criterion) => criterion.id));
   const [panelWidth, setPanelWidth] = useState(300);
   const panelResizeRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
   const [baseMap, setBaseMap] = useState<BaseMapId>(initialBaseMap);
@@ -306,6 +311,7 @@ export default function App() {
     : baseMap === "osm" || baseMap === "qgis" ? null : baseMap;
   const selectedVectorStatus = selectedVectorBaseMap ? openFreeMapStatus[selectedVectorBaseMap] : "idle";
   const selectedElement = drawingTools.selectedElementInfo;
+  const polygonElements = drawingTools.elements.filter((element) => element.geometryType === "Polygon");
   const explorationTerrainTheme: ExplorationTerrainTheme = terrainThemeForBaseMap(baseMap) ?? "none";
   const selectedTerrainTheme: TerrainTheme = terrainThemeForBaseMap(baseMap) ?? "elevation";
   const explorationThemeOpacity = explorationThemeOpacities[selectedTerrainTheme];
@@ -325,6 +331,20 @@ export default function App() {
   useEffect(() => {
     terrainAnalysis.syncAreas(drawingTools.elements);
   }, [drawingTools.elements, terrainAnalysis.syncAreas]);
+
+  useEffect(() => {
+    const polygonIds = new Set(polygonElements.map((element) => element.id));
+    setComparisonAreaIds((current) => {
+      if (current === null) return null;
+      const next = current.filter((id) => polygonIds.has(id));
+      return next.length === current.length ? current : next;
+    });
+  }, [drawingTools.elements]);
+
+  const openAreaComparison = () => {
+    setComparisonAreaIds((current) => current ?? polygonElements.slice(0, 2).map((element) => element.id));
+    setComparisonOpen(true);
+  };
 
   const renderBaseMapOption = (option: { id: BaseMapId; title: string; description: string }) => {
     const terrain = isTerrainBaseMap(option.id);
@@ -738,6 +758,7 @@ export default function App() {
             onFocus={openAreaDetails}
             onRename={drawingTools.renameElement}
             onDelete={drawingTools.deleteElement}
+            onCompare={openAreaComparison}
           /> : <GeometryDetails
             element={selectedElement}
             analysis={terrainAnalysis.analyses[selectedElement.id]}
@@ -941,6 +962,19 @@ export default function App() {
           )}
         </section>
       </main>
+      {comparisonOpen && <ObjectiveAreaComparison
+        areas={polygonElements}
+        analyses={terrainAnalysis.analyses}
+        selectedAreaIds={comparisonAreaIds ?? polygonElements.slice(0, 2).map((element) => element.id)}
+        onSelectedAreaIdsChange={setComparisonAreaIds}
+        selectedCriterionIds={comparisonCriterionIds}
+        onSelectedCriterionIdsChange={setComparisonCriterionIds}
+        onClose={() => setComparisonOpen(false)}
+        onOpenArea={(areaId) => {
+          setComparisonOpen(false);
+          openAreaDetails(areaId);
+        }}
+      />}
     </div>
   );
 }
