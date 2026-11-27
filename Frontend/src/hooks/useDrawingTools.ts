@@ -32,6 +32,7 @@ export type DrawnElement = {
   id: string;
   name: string;
   geometryType: DrawingGeometry;
+  bboxWgs84?: [number, number, number, number];
 };
 
 export type SelectedElementInfo = {
@@ -194,12 +195,18 @@ export function useDrawingTools() {
   const refreshElements = useCallback(() => {
     setElements(
       source.getFeatures().map((feature) => {
-        const geometryType = feature.getGeometry()?.getType() as DrawingGeometry | undefined;
+        const geometry = feature.getGeometry();
+        const geometryType = geometry?.getType() as DrawingGeometry | undefined;
         const id = feature.getId();
+        const projection = mapRef.current?.getView().getProjection();
+        const bboxWgs84 = geometry instanceof Polygon && projection
+          ? transformExtent(geometry.getExtent(), projection, "EPSG:4326", 8) as [number, number, number, number]
+          : undefined;
         return {
           id: String(id ?? ""),
           name: String(feature.get("name") ?? "Elemento"),
           geometryType: geometryType ?? "Point",
+          ...(bboxWgs84 ? { bboxWgs84 } : {}),
         };
       }),
     );
@@ -537,6 +544,14 @@ export function useDrawingTools() {
     refreshSelection();
   }, [refreshSelection, source]);
 
+  const deleteElement = useCallback((id: string) => {
+    const feature = source.getFeatureById(id);
+    if (!feature) return;
+    selectedFeaturesRef.current?.remove(feature as Feature<Geometry>);
+    source.removeFeature(feature);
+    refreshSelection();
+  }, [refreshSelection, source]);
+
   const renameElement = useCallback((id: string, name: string) => {
     const feature = source.getFeatureById(id);
     if (!feature) return;
@@ -579,6 +594,7 @@ export function useDrawingTools() {
     selectElement,
     centerElement,
     deleteSelected,
+    deleteElement,
     renameElement,
     setTerrainFeatureId,
   };

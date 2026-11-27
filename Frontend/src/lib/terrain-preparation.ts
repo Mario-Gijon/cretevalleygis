@@ -62,7 +62,7 @@ export type TerrainPreparationResult = {
       maximum: number;
       wms_layer: string;
       raster_kind: "numeric-analysis-data";
-      legend: Array<{ value: number; color: string; label: string }>;
+      legend: Array<{ id: string; upper_bound: number | null; color: string; label: string }>;
     };
     aspect: {
       unit: "degrees";
@@ -75,7 +75,7 @@ export type TerrainPreparationResult = {
       display_flat_value: number;
       raw_raster_nodata: number;
       raster_kind: "numeric-analysis-data";
-      legend: Array<{ direction: string; label: string; color: string }>;
+      legend: Array<{ id: string; direction: string; label: string; color: string }>;
     };
   };
   preparation: {

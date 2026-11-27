@@ -59,6 +59,7 @@ import {
 import type { TerrainPreparationResult, TerrainPreparationView } from "@/lib/terrain-preparation";
 
 type ThemeMode = "light" | "dark";
+type PanelTab = "layers" | "areas" | "analysis";
 
 function initialTheme(): ThemeMode {
   try {
@@ -94,6 +95,9 @@ export default function App() {
   const [panelOpen, setPanelOpen] = useState(
     () => !window.matchMedia("(max-width: 720px)").matches,
   );
+  const [panelTab, setPanelTab] = useState<PanelTab>("layers");
+  const [panelWidth, setPanelWidth] = useState(300);
+  const panelResizeRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
   const [baseMap, setBaseMap] = useState<BaseMapId>("positron");
   const baseMapRef = useRef<BaseMapId>(baseMap);
   const [openFreeMapStatus, setOpenFreeMapStatus] = useState<Record<OpenFreeMapId, OpenFreeMapStatus>>({
@@ -287,6 +291,12 @@ export default function App() {
   const terrainRenderMode = terrainServiceState === "available"
     ? getTerrainRenderMode(mapExtent, mapResolution, terrainCoverage)
     : "hidden";
+  const groundResolution = mapResolution === null
+    ? null
+    : mapResolution * Math.cos((mapCenter[1] * Math.PI) / 180);
+  const activeTerrainOverzoomFactor = activePreparedTerrain && groundResolution && groundResolution > 0
+    ? activePreparedTerrain.result.coverage.resolution_m / groundResolution
+    : null;
   const detailedCoverageRatio = getTerrainCoverageRatio(mapExtent, terrainCoverage);
   const hasDetailedCoverageForView = detailedCoverageRatio >= TERRAIN_VISIBILITY_THRESHOLDS.detailedMinViewCoverageRatio;
   const hasTopographicPreference = Object.values(topographicVisibility).some(Boolean);
@@ -540,7 +550,10 @@ export default function App() {
         </div>
       </header>
 
-      <main className={`workspace ${panelOpen ? "workspace--panel-open" : "workspace--panel-closed"}`}>
+      <main
+        className={`workspace ${panelOpen ? "workspace--panel-open" : "workspace--panel-closed"}`}
+        style={panelOpen ? { gridTemplateColumns: `${panelWidth}px minmax(0, 1fr)` } : undefined}
+      >
         {panelOpen && (
           <button
             type="button"
@@ -570,8 +583,31 @@ export default function App() {
               <X size={17} />
             </Button>
           </div>
+          <div className="panel-tabs" role="tablist" aria-label="Contenido del panel">
+            {([
+              ["layers", "Capas"],
+              ["areas", `Áreas${drawingTools.elements.length ? ` · ${drawingTools.elements.length}` : ""}`],
+              ["analysis", "Análisis"],
+            ] as const).map(([tab, label]) => (
+              <button
+                key={tab}
+                id={`panel-tab-${tab}`}
+                type="button"
+                role="tab"
+                aria-selected={panelTab === tab}
+                aria-controls="panel-tab-content"
+                tabIndex={panelTab === tab ? 0 : -1}
+                onClick={() => setPanelTab(tab)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="panel-content" id="panel-tab-content" role="tabpanel" aria-labelledby={`panel-tab-${panelTab}`}>
+          {panelTab === "layers" && (
+            <>
           <section className="layer-section" aria-labelledby="base-layers-title">
-            <h2 className="eyebrow" id="base-layers-title">CAPA BASE</h2>
+            <h2 className="eyebrow" id="base-layers-title">MAPA BASE</h2>
             <div className="base-map-options" role="radiogroup" aria-label="Mapa base">
               {BASE_MAP_OPTIONS.map((option) => {
                 const vectorId = option.id === "osm" || option.id === "qgis" ? null : option.id;
@@ -608,9 +644,9 @@ export default function App() {
             </div>
           </section>
 
-          <section className="layer-section thematic-layer-section" aria-labelledby="geographic-layers-title">
-            <h2 className="eyebrow" id="geographic-layers-title">CAPAS GEOGRÁFICAS</h2>
-            <p className="overlay-intro">Añade información al mapa sin cambiar su vista.</p>
+          <details className="panel-group thematic-layer-section" open>
+            <summary className="panel-group-summary"><span className="eyebrow" id="geographic-layers-title">CAPAS GEOGRÁFICAS</span></summary>
+            <p className="overlay-intro">Límites, lugares y agua.</p>
             <div className="overlay-layer-list">
               {([
                 ["boundaries", ScanLine],
@@ -637,10 +673,10 @@ export default function App() {
                 );
               })}
             </div>
-          </section>
+          </details>
 
-          <section className="layer-section topography-section" aria-labelledby="topography-title">
-            <h2 className="eyebrow" id="topography-title">TOPOGRAFÍA</h2>
+          <details className="panel-group topography-section" open>
+            <summary className="panel-group-summary"><span className="eyebrow" id="topography-title">TOPOGRAFÍA</span></summary>
             <p className="overlay-intro">
               {activePreparedTerrain
                 ? "El terreno preparado tiene prioridad. Al cerrarlo, vuelve el relieve mundial."
@@ -744,7 +780,7 @@ export default function App() {
                 <span className="elevation-legend-title">Pendiente · porcentaje</span>
                 <div className="derivative-legend-grid">
                   {regionalDerivatives.slope.legend.map((item) => (
-                    <span className="derivative-legend-item" key={item.value}>
+                    <span className="derivative-legend-item" key={item.id}>
                       <i style={{ backgroundColor: item.color }} aria-hidden="true" />
                       {item.label}
                     </span>
@@ -757,7 +793,7 @@ export default function App() {
                 <span className="elevation-legend-title">Orientación · {regionalDerivatives.aspect.north_reference_label}</span>
                 <div className="derivative-legend-grid derivative-legend-grid--aspect">
                   {regionalDerivatives.aspect.legend.map((item) => (
-                    <span className="derivative-legend-item" key={item.direction} title={item.label}>
+                    <span className="derivative-legend-item" key={item.id} title={item.label} aria-label={item.label}>
                       <i style={{ backgroundColor: item.color }} aria-hidden="true" />
                       {item.direction}
                     </span>
@@ -806,11 +842,12 @@ export default function App() {
                 )}
               </div>
             )}
-            {activePreparedTerrain ? (
+            {activePreparedTerrain && topographicVisibility.elevation && (
               <p className="terrain-coverage-note" role="status">
-                Escala ajustada a esta región; los colores no son comparables entre zonas. Elevación y sombreado se controlan por separado.
+                Escala de color adaptada a esta área.
               </p>
-            ) : terrainServiceState === "loading" && (
+            )}
+            {!activePreparedTerrain && terrainServiceState === "loading" && (
               <p className="terrain-coverage-note" role="status">Comprobando los datos topográficos preparados…</p>
             )}
             {!activePreparedTerrain && terrainServiceState === "unavailable" && (
@@ -833,24 +870,38 @@ export default function App() {
                         : "Sin cobertura detallada suficiente; el relieve se oculta y se mantiene el mapa base."}
               </p>
             )}
-            <div className="copernicus-notice">
+            {activePreparedTerrain && activeTerrainOverzoomFactor !== null && activeTerrainOverzoomFactor > 2 && (
+              <p className="terrain-resolution-note" role="status">
+                Vista ampliada {activeTerrainOverzoomFactor.toLocaleString("es-ES", { maximumFractionDigits: 1 })}× sobre la resolución de {activePreparedTerrain.result.coverage.resolution_m} m; el zoom no añade detalle al terreno.
+              </p>
+            )}
+            <details className="terrain-source-details">
+              <summary>Fuentes y atribución</summary>
+              <div className="copernicus-notice">
               <span>ETOPO 2022 · NOAA NCEI · DOI: 10.25921/fd45-gt74 · CC0 1.0.</span>
               <a href="https://www.ncei.noaa.gov/products/etopo-global-relief-model" target="_blank" rel="noreferrer">Fuente y documentación NOAA</a>
-            </div>
-            <div className="copernicus-notice">
+              </div>
+              <div className="copernicus-notice">
               <span>© DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.</span>
               <span>Produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.</span>
               <span>The organisations in charge of the Copernicus programme by law or by delegation do not incur any liability for any use of the Copernicus WorldDEM-30.</span>
               <a href="https://dataspace.copernicus.eu/sites/default/files/media/files/2025-06/copernicus_contributing_mission_data_access_v2_cop_dem_licenses.pdf" target="_blank" rel="noreferrer">Licencia de Copernicus DEM</a>
-            </div>
-          </section>
+              </div>
+            </details>
+          </details>
+            </>
+          )}
 
-          <DrawnElementsList
+          {panelTab === "areas" && <DrawnElementsList
             elements={drawingTools.elements}
             selectedIds={drawingTools.selectedIds}
             onFocus={focusElement}
-          />
-          <GeometryDetails
+            onRename={drawingTools.renameElement}
+            onDelete={drawingTools.deleteElement}
+            terrainJobs={terrainJobs.jobs}
+          />}
+
+          {panelTab === "analysis" && (drawingTools.selectedElementInfo ? <GeometryDetails
             element={drawingTools.selectedElementInfo}
             onRename={drawingTools.renameElement}
             terrainPreparation={selectedTerrainPreparation}
@@ -859,9 +910,15 @@ export default function App() {
             onShowPreparedTerrain={showPreparedTerrain}
             onClosePreparedTerrain={closePreparedTerrain}
             onCenterPreparedTerrain={centerPreparedTerrain}
-          />
+          /> : (
+            <div className="panel-empty-state">
+              <MapPinned size={20} aria-hidden="true" />
+              <strong>Selecciona un elemento</strong>
+              <span>Sus medidas y opciones aparecerán aquí.</span>
+            </div>
+          ))}
+          </div>
 
-          <div className="panel-spacer" />
           <div className="panel-attribution">
             <span>Fuente cartográfica</span>
             {baseMap === "osm" ? (
@@ -882,6 +939,32 @@ export default function App() {
               </>
             )}
           </div>
+          <div
+            className="panel-resize-handle"
+            role="separator"
+            aria-label="Redimensionar panel lateral"
+            aria-orientation="vertical"
+            aria-valuemin={260}
+            aria-valuemax={460}
+            aria-valuenow={panelWidth}
+            tabIndex={0}
+            onPointerDown={(event) => {
+              panelResizeRef.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: panelWidth };
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+              const drag = panelResizeRef.current;
+              if (!drag || drag.pointerId !== event.pointerId) return;
+              setPanelWidth(Math.max(260, Math.min(460, Math.min(window.innerWidth * 0.44, drag.startWidth + event.clientX - drag.startX))));
+            }}
+            onPointerUp={() => { panelResizeRef.current = null; }}
+            onPointerCancel={() => { panelResizeRef.current = null; }}
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+              event.preventDefault();
+              setPanelWidth((width) => Math.max(260, Math.min(460, width + (event.key === "ArrowRight" ? 16 : -16))));
+            }}
+          />
         </aside>
 
         <section

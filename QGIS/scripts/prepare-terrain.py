@@ -766,7 +766,9 @@ def derive_slope_aspect(
         ]
         if overview_levels:
             for path, resampling in (
-                (temporary_slope, "AVERAGE"),
+                # Slope is rendered as fixed discrete classes. Nearest keeps
+                # each overview sample in the same class as a real source cell.
+                (temporary_slope, "NEAREST"),
                 (temporary_aspect, "NEAREST"),
                 (temporary_display, "NEAREST"),
             ):
@@ -931,9 +933,8 @@ def add_terrain_to_project(elevation_path: Path, hillshade_path: Path, record: d
         f"renderer stops: {style_stops_text}. "
         "Colours are scaled to this region and should not be compared directly between regions."
     )
-    shared_abstract = f"{shared_abstract} {style_abstract}"
     style_hillshade(hillshade)
-    set_raster_metadata(elevation, f"Elevación del terreno — {area_name}", f"{PRODUCT}, 30 m; elevation units: metres. {shared_abstract}")
+    set_raster_metadata(elevation, f"Elevación del terreno — {area_name}", f"{PRODUCT}, 30 m; elevation units: metres. {shared_abstract} {style_abstract}")
     set_raster_metadata(hillshade, f"Relieve sombreado — {area_name}", f"Hillshade derived with GDAL from {PRODUCT}, 30 m. {shared_abstract}")
     project.addMapLayer(elevation)
     project.addMapLayer(hillshade)

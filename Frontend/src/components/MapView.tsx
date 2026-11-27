@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Feature from "ol/Feature.js";
 import type Map from "ol/Map.js";
 import Attribution from "ol/control/Attribution.js";
+import ScaleLine from "ol/control/ScaleLine.js";
 import { defaults as defaultControls } from "ol/control/defaults.js";
 import { fromLonLat, toLonLat, transformExtent } from "ol/proj.js";
 import OSM from "ol/source/OSM.js";
@@ -121,6 +122,9 @@ export default function MapView({
     const naturalEarthAttribution = '<a href="https://www.naturalearthdata.com/" target="_blank" rel="noreferrer">Made with Natural Earth</a>';
     const qgisSource = new ImageWMS({
       url: "/qgis/ogc/world",
+      ratio: 1,
+      hidpi: true,
+      interpolate: true,
       params: {
         LAYERS: BASE_MAP_WMS_LAYERS.join(","),
         VERSION: "1.3.0",
@@ -143,6 +147,9 @@ export default function MapView({
         id,
         new ImageWMS({
           url: "/qgis/ogc/world",
+          ratio: 1,
+          hidpi: true,
+          interpolate: true,
           params: {
             LAYERS: overlay.layers.join(","),
             VERSION: "1.3.0",
@@ -165,6 +172,9 @@ export default function MapView({
         id,
         new ImageWMS({
           url: "/qgis/ogc/world",
+          ratio: 1,
+          hidpi: true,
+          interpolate: id !== "slope" && id !== "aspect",
           params: {
             VERSION: "1.3.0",
             FORMAT: "image/png",
@@ -189,6 +199,9 @@ export default function MapView({
         id,
         new ImageWMS({
           url: "/qgis/ogc/world",
+          ratio: 1,
+          hidpi: true,
+          interpolate: id !== "slope" && id !== "aspect",
           params: {
             VERSION: "1.3.0",
             FORMAT: "image/png",
@@ -211,6 +224,7 @@ export default function MapView({
     ) as TopographicLayers;
     const map = new OlMap({
       target: targetRef.current,
+      pixelRatio: window.devicePixelRatio || 1,
       layers: [
         osmLayer,
         qgisLayer,
@@ -236,6 +250,7 @@ export default function MapView({
         zoom: false,
       }).extend([
         new Attribution({ collapsible: false }),
+        new ScaleLine({ units: "metric", bar: true, text: true, minWidth: 112, steps: 4 }),
       ]),
       view: new View({
         center: fromLonLat([...CRETE_CENTER]),

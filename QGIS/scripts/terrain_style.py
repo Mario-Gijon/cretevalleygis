@@ -11,7 +11,7 @@ from qgis.core import (
     QgsSingleBandPseudoColorRenderer,
 )
 from qgis.PyQt.QtGui import QColor
-from terrain_derivative_config import ASPECT_SHADER_ITEMS, SLOPE_BREAKS
+from terrain_derivative_config import ASPECT_SHADER_ITEMS, SLOPE_BREAKS, SLOPE_SHADER_MAXIMUM
 from terrain_style_config import regional_elevation_style
 
 
@@ -94,27 +94,25 @@ def style_hillshade(layer: QgsRasterLayer) -> None:
 
 
 def style_slope(layer: QgsRasterLayer) -> None:
-    """Render percent slope with fixed, discrete classes across all regions."""
+    """Render slope using inclusive upper bounds matching the displayed legend."""
     items = [
         QgsColorRampShader.ColorRampItem(
-            entry["value"], QColor(entry["color"]), entry["label"]
+            entry["shader_value"], QColor(entry["color"]), entry["label"]
         )
         for entry in SLOPE_BREAKS
     ]
-    items.append(QgsColorRampShader.ColorRampItem(1_000_000.0, QColor(SLOPE_BREAKS[-1]["color"]), ""))
-    color_shader = QgsColorRampShader(0.0, 1_000_000.0)
+    color_shader = QgsColorRampShader(0.0, SLOPE_SHADER_MAXIMUM)
     color_shader.setColorRampType(QgsColorRampShader.Discrete)
     color_shader.setColorRampItemList(items)
-    raster_shader = QgsRasterShader(0.0, 1_000_000.0)
+    raster_shader = QgsRasterShader(0.0, SLOPE_SHADER_MAXIMUM)
     raster_shader.setRasterShaderFunction(color_shader)
     layer.setRenderer(QgsSingleBandPseudoColorRenderer(layer.dataProvider(), 1, raster_shader))
-    # Slope colors are classified after value resampling; bilinear sampling
-    # softens numerical noise without interpolating the palette itself.
-    set_visual_resampling(layer)
+    # Keep the provider's nearest-neighbour sampling: bilinear resampling before
+    # classification can move pixels across a displayed class boundary.
 
 
 def style_aspect(layer: QgsRasterLayer) -> None:
-    """Render compass directions as discrete categories, including flat cells."""
+    """Render direction bins using inclusive upper bounds and a wrapped north."""
     items = [
         QgsColorRampShader.ColorRampItem(
             entry["value"], QColor(entry["color"]), entry["label"]
