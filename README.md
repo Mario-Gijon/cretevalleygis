@@ -74,6 +74,14 @@ El GeoTIFF original se guarda separado en `terrain/global/source`; GDAL crea pro
 
 ETOPO 60″ sirve para visualización general, no para navegación ni como dato local validado para análisis detallados. Copernicus de 30 m ofrece mayor detalle visual en el macizo del Ida, pero sigue siendo un DSM y requiere validación específica antes de un uso analítico. Los valores negativos representan batimetría; NoData permanece transparente y no se confunde con 0 m. La interfaz muestra el rango mundial de elevación y la resolución disponible. Fuentes: [NOAA ETOPO Global Relief Model](https://www.ncei.noaa.gov/products/etopo-global-relief-model) y [guía del producto](https://www.ngdc.noaa.gov/mgg/global/relief/ETOPO2022/docs/1.2%20ETOPO%202022%20User%20Guide.pdf).
 
+### Relieve de exploración Mapzen
+
+El relieve sombreado del mapa completo utiliza las teselas [Mapzen Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) en AWS Open Data, servidas en formato Terrarium (`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png`). Cada tesela PNG de 256 × 256 píxeles codifica elevaciones en metros mediante `256 × R + G + B/256 − 32768`. Es un mosaico de fuentes abiertas con resoluciones y coberturas variables; su disponibilidad hasta zoom 15 no implica que todos los lugares tengan detalle uniforme. La aplicación conserva como atribución visible el enlace de [fuentes y créditos de Tilezen/Mapzen](https://github.com/tilezen/joerd/blob/master/docs/attribution.md), con las condiciones de los proveedores incluidos.
+
+La preferencia de relieve de exploración se activa inicialmente y se recuerda en este navegador. Las teselas solo se solicitan a partir de zoom 8; hasta zoom 15 se obtienen teselas de esos niveles y por encima se amplía la última resolución disponible, sin presentarla como detalle adicional. OpenLayers las procesa con `WebGLTile` en la GPU. El sombreado muestrea los píxeles vecinos para estimar pendiente y orientación; corrige la distancia de terreno por píxel con la latitud central de la vista. Se usan exageración vertical 1,15×, iluminación con elevación de 45° y azimut 315°, opacidad inicial 30 %, sin niveles precargados y con caché de 96 teselas WebGL. El umbral, los parámetros del sombreado y el tamaño de caché están centralizados en `Frontend/src/lib/exploration-terrain.ts`.
+
+Esta capa sirve para explorar, no para mediciones ni análisis objetivos. Cuando el relieve de exploración está visible, el sombreado general ETOPO se oculta para no duplicar sombras; cuando se visualiza hillshade de un terreno preparado, se pausa el relieve de exploración y recupera la preferencia automáticamente al ocultarlo. Los terrenos Copernicus y sus derivados analíticos conservan su estado independiente. Si falla WebGL o el acceso a teselas, permanecen disponibles el mapa base y las herramientas.
+
 Para preparar o actualizar las capas sin volver a descargar datos válidos:
 
 ```bash

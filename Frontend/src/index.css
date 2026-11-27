@@ -787,6 +787,61 @@ button {
   margin-top: 19px;
 }
 
+.terrain-exploration-controls {
+  margin: 8px 0 13px;
+  padding: 8px 9px 9px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-soft);
+}
+
+.terrain-exploration-controls > summary {
+  width: fit-content;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.terrain-exploration-controls > .overlay-intro {
+  margin: 5px 0 6px;
+}
+
+.exploration-terrain-row {
+  padding: 5px 0 3px;
+}
+
+.exploration-terrain-status {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.exploration-terrain-status--active,
+.exploration-terrain-status--overzoom {
+  color: var(--cv-blue);
+}
+
+.app-shell[data-theme="dark"] .exploration-terrain-status--active,
+.app-shell[data-theme="dark"] .exploration-terrain-status--overzoom {
+  color: #8cc9f2;
+}
+
+.exploration-terrain-status--error,
+.exploration-terrain-status--unavailable {
+  color: #a8433d;
+}
+
+.exploration-terrain-opacity {
+  margin-top: 8px;
+}
+
+.terrain-area-heading {
+  margin: 10px 0 8px;
+  padding-top: 4px;
+}
+
 .topographic-layer-list {
   display: flex;
   flex-direction: column;

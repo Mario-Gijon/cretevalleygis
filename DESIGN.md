@@ -10,4 +10,5 @@
 - El selector compacto distingue mapas base de capas de análisis: Positron es la opción inicial, con Dark, Liberty, OpenStreetMap y QGIS como alternativas. Los estilos vectoriales se cargan bajo demanda sobre OpenLayers y sus atribuciones permanecen visibles.
 - Los terrenos preparados se configuran por área y conservan su visibilidad, tema y opacidad al cambiar de selección. Hillshade acompaña una sola representación temática; la elevación usa una leyenda local y pendientes/orientación conservan escalas comparables.
 - La topografía queda por debajo de las capas geográficas, los dibujos y las mediciones. Cada terreno se recorta con la geometría real y solo solicita WMS mientras esté visible y dentro de su extensión.
+- El relieve Mapzen de exploración se presenta como capa del mapa con estado de escala y opacidad propia. Hillshade de área preparada tiene prioridad y pausa el sombreado general para evitar su duplicación; su preferencia se conserva y se reactiva al ocultar el terreno detallado.
 - Las teselas renderizadas sirven solo para contexto visual, nunca como dato de cálculo.

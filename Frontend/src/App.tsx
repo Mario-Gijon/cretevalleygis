@@ -58,6 +58,11 @@ import {
 } from "@/lib/topographic-layers";
 import type { TerrainPreparationResult, TerrainPreparationView } from "@/lib/terrain-preparation";
 import {
+  EXPLORATION_TERRAIN,
+  initialExplorationTerrainEnabled,
+  type ExplorationTerrainStatus,
+} from "@/lib/exploration-terrain";
+import {
   createPreparedTerrainState,
   type PreparedTerrainMapEntry,
   type PreparedTerrainState,
@@ -88,6 +93,18 @@ const TOPOGRAPHIC_LAYER_OPTIONS = [
   ["slope", TrendingUp],
   ["aspect", Compass],
 ] as const;
+
+function explorationTerrainStatusMessage(status: ExplorationTerrainStatus, zoom: number): string {
+  if (status === "disabled") return "Relieve de exploración desactivado.";
+  if (status === "scale") return `Disponible al acercar a zoom ${EXPLORATION_TERRAIN.minZoom}. No se solicitan teselas por debajo de esa escala.`;
+  if (status === "loading") return "Cargando teselas de relieve para esta vista…";
+  if (status === "active") return "Relieve de exploración activo.";
+  if (status === "overzoom") return `Activo hasta zoom ${EXPLORATION_TERRAIN.maxDataZoom}; ampliar más no añade detalle del terreno.`;
+  if (status === "regional-priority") return "En pausa mientras se muestra el relieve detallado de un área.";
+  if (status === "unavailable") return "WebGL no está disponible; el mapa base y las herramientas siguen funcionando.";
+  if (status === "error") return "No se pudieron cargar algunas teselas; el mapa base sigue disponible.";
+  return `Zoom actual ${zoom.toLocaleString("es-ES", { maximumFractionDigits: 1 })}.`;
+}
 
 export default function App() {
   const mapStageRef = useRef<HTMLElement | null>(null);
@@ -127,12 +144,17 @@ export default function App() {
     aspect: true,
   });
   const [terrainCoverage, setTerrainCoverage] = useState<TerrainCoverage | null>(null);
+  const [explorationTerrainEnabled, setExplorationTerrainEnabled] = useState(initialExplorationTerrainEnabled);
+  const [explorationTerrainOpacity, setExplorationTerrainOpacity] = useState<number>(EXPLORATION_TERRAIN.defaultOpacity);
+  const [explorationTerrainVisible, setExplorationTerrainVisible] = useState(false);
+  const [explorationTerrainStatus, setExplorationTerrainStatus] = useState<ExplorationTerrainStatus>("loading");
   const [preparedTerrains, setPreparedTerrains] = useState<Record<string, PreparedTerrainState>>({});
   const preparedTerrainsRef = useRef(preparedTerrains);
   const terrainRequestRevisionsRef = useRef(new globalThis.Map<string, number>());
   const [terrainServiceState, setTerrainServiceState] = useState<"loading" | "available" | "unavailable">("loading");
   const [mapExtent, setMapExtent] = useState<[number, number, number, number] | null>(null);
   const [mapResolution, setMapResolution] = useState<number | null>(null);
+  const [mapZoom, setMapZoom] = useState(8.2);
   const [qgisStatus, setQgisStatus] = useState<QgisStatus>("idle");
   const [mapStatus, setMapStatus] = useState<MapStatus>({
     ready: false,
@@ -152,10 +174,12 @@ export default function App() {
     center: [number, number],
     extent: [number, number, number, number],
     resolution: number,
+    zoom: number,
   ) => {
     setMapCenter(center);
     setMapExtent(extent);
     setMapResolution(resolution);
+    setMapZoom(zoom);
   }, []);
 
   const handleQgisStatusChange = useCallback((status: QgisStatus) => {
@@ -218,6 +242,23 @@ export default function App() {
     baseLayersRef.current?.topography[id].setOpacity(opacity / 100);
     setTopographicOpacity((current) => ({ ...current, [id]: opacity }));
   };
+
+  const changeExplorationTerrainEnabled = (enabled: boolean) => {
+    setExplorationTerrainEnabled(enabled);
+    try {
+      window.localStorage.setItem(EXPLORATION_TERRAIN.storageKey, String(enabled));
+    } catch {
+      // The preference remains active for this page if storage is unavailable.
+    }
+  };
+
+  const handleExplorationTerrainStatusChange = useCallback((status: ExplorationTerrainStatus) => {
+    setExplorationTerrainStatus(status);
+  }, []);
+
+  const handleExplorationTerrainVisibilityChange = useCallback((visible: boolean) => {
+    setExplorationTerrainVisible((current) => current === visible ? current : visible);
+  }, []);
 
   const activatePreparedTerrain = useCallback((elementId: string, jobId: string, result: TerrainPreparationResult) => {
     const feature = drawingTools.layer.getSource()?.getFeatureById(elementId);
@@ -357,6 +398,11 @@ export default function App() {
     if (!(geometry instanceof Polygon) || geometry.getRevision() !== terrain.geometryRevision) return [];
     return [{ ...terrain, geometry, selected: terrain.elementId === selectedElement?.id }];
   }), [drawingTools.layer, preparedTerrains, selectedElement?.id]);
+  const hasVisibleRegionalHillshade = preparedTerrainEntries.some((terrain) => (
+    terrain.visible && terrain.visibility.hillshade
+  ));
+  const suppressGlobalHillshade = explorationTerrainVisible || hasVisibleRegionalHillshade;
+  const explorationStatusMessage = explorationTerrainStatusMessage(explorationTerrainStatus, mapZoom);
   const regionalElevationGradient = regionalElevationStyle
     ? `linear-gradient(90deg, ${regionalElevationStyle.stops.map((stop) => (
       `${stop.color} ${(stop.position * 100).toFixed(2)}%`
@@ -409,7 +455,12 @@ export default function App() {
       const source = layer.getSource();
       if (!source) return;
       const supportsGlobalLayer = id === "hillshade" || id === "elevation";
-      const shouldRender = supportsGlobalLayer && terrainServiceState === "available" && topographicVisibility[id] && terrainRenderMode !== "hidden";
+      const globalHillshadeBlocked = id === "hillshade" && suppressGlobalHillshade;
+      const shouldRender = supportsGlobalLayer
+        && terrainServiceState === "available"
+        && topographicVisibility[id]
+        && terrainRenderMode !== "hidden"
+        && !globalHillshadeBlocked;
       if (shouldRender) {
         const names = TOPOGRAPHIC_LAYERS[id];
         const requestedLayer = terrainRenderMode === "detailed"
@@ -421,7 +472,7 @@ export default function App() {
       }
       if (layer.getVisible() !== shouldRender) layer.setVisible(shouldRender);
     });
-  }, [terrainRenderMode, terrainServiceState, topographicVisibility]);
+  }, [suppressGlobalHillshade, terrainRenderMode, terrainServiceState, topographicVisibility]);
 
   const handlePreparedTerrainAvailabilityChange = useCallback((elementId: string, id: TopographicLayerId, available: boolean) => {
     setPreparedTerrains((current) => {
@@ -710,6 +761,41 @@ export default function App() {
 
           <details className="panel-group topography-section" open>
             <summary className="panel-group-summary"><span className="eyebrow" id="topography-title">TOPOGRAFÍA</span></summary>
+            <details className="terrain-exploration-controls" open>
+              <summary>Topografía del mapa</summary>
+              <p className="overlay-intro">Relieve sombreado para recorrer el territorio sin preparar un área.</p>
+              <div className="overlay-layer-row topographic-layer-row exploration-terrain-row">
+                <span className="overlay-symbol topographic-symbol topographic-symbol--hillshade" aria-hidden="true"><Mountain size={16} /></span>
+                <span className="layer-copy">
+                  <span className="layer-title">Relieve de exploración</span>
+                  <span className="layer-subtitle">Mapzen Terrain Tiles · hasta zoom {EXPLORATION_TERRAIN.maxDataZoom}</span>
+                </span>
+                <Switch
+                  checked={explorationTerrainEnabled}
+                  onCheckedChange={changeExplorationTerrainEnabled}
+                  aria-label={`${explorationTerrainEnabled ? "Desactivar" : "Activar"} relieve de exploración`}
+                />
+              </div>
+              <p className={`exploration-terrain-status exploration-terrain-status--${explorationTerrainStatus}`} role="status">{explorationStatusMessage}</p>
+              {explorationTerrainEnabled && (
+                <label className="topographic-opacity exploration-terrain-opacity" htmlFor="exploration-relief-opacity">
+                  <span>Opacidad</span><output htmlFor="exploration-relief-opacity">{explorationTerrainOpacity} %</output>
+                  <input
+                    id="exploration-relief-opacity"
+                    type="range"
+                    min="10"
+                    max="60"
+                    step="5"
+                    value={explorationTerrainOpacity}
+                    onChange={(event) => setExplorationTerrainOpacity(Number(event.currentTarget.value))}
+                    aria-label="Opacidad del relieve de exploración"
+                  />
+                </label>
+              )}
+              <p className="terrain-coverage-note">Visualización orientativa; no se usa para cálculos ni criterios.</p>
+            </details>
+
+            <div className="terrain-area-heading"><span className="eyebrow">TOPOGRAFÍA DE ÁREAS</span></div>
             {selectedPreparedTerrain ? (
               <>
                 <p className="overlay-intro">Configuración para {selectedPreparedTerrain.result.coverage.area_name} · {selectedPreparedTerrain.result.coverage.resolution_m} m.</p>
@@ -786,7 +872,7 @@ export default function App() {
               <p className="overlay-intro">Selecciona un terreno preparado en «Áreas» para ajustar sus capas. El relieve mundial sigue disponible abajo.</p>
             )}
             <details className="terrain-global-controls">
-              <summary>Relieve mundial · 60″</summary>
+              <summary>Relieve mundial · ETOPO 60″</summary>
               <p className="terrain-coverage-note">Opción general de menor resolución; el terreno preparado se dibuja por encima en su área.</p>
               <div className="topographic-layer-list">
                 {TOPOGRAPHIC_LAYER_OPTIONS.filter(([id]) => id === "hillshade" || id === "elevation").map(([id, Icon]) => {
@@ -799,6 +885,7 @@ export default function App() {
                   </div>;
                 })}
               </div>
+              {topographicVisibility.hillshade && suppressGlobalHillshade && <p className="terrain-coverage-note">El sombreado ETOPO se oculta mientras se muestra el relieve de exploración o un terreno detallado.</p>}
               {topographicVisibility.elevation && terrainCoverage && terrainRenderMode !== "hidden" && <div className="elevation-legend"><span className="elevation-legend-title">Elevación mundial · altura y profundidad (m)</span><div className="elevation-legend-values"><span>{Math.round(terrainCoverage.minElevation)} m</span><span>0 m</span><span>{Math.round(terrainCoverage.maxElevation)} m</span></div></div>}
               {terrainServiceState === "unavailable" && <p className="terrain-coverage-note terrain-coverage-note--error">Relieve mundial no disponible; las áreas preparadas siguen funcionando.</p>}
               {terrainServiceState === "available" && terrainCoverage && <p className="terrain-coverage-note">{!hasTopographicPreference ? "Relieve mundial desactivado." : terrainRenderMode === "hidden" ? "Relieve mundial oculto por escala." : terrainRenderMode === "detailed" ? "Copernicus 30 m disponible en esta vista." : hasDetailedCoverageForView ? "ETOPO 60″ visible; el detalle aparece al acercar." : "ETOPO 60″ visible; no hay cobertura detallada suficiente."}</p>}
@@ -808,6 +895,10 @@ export default function App() {
               <div className="copernicus-notice">
               <span>ETOPO 2022 · NOAA NCEI · DOI: 10.25921/fd45-gt74 · CC0 1.0.</span>
               <a href="https://www.ncei.noaa.gov/products/etopo-global-relief-model" target="_blank" rel="noreferrer">Fuente y documentación NOAA</a>
+              </div>
+              <div className="copernicus-notice">
+                <span>Mapzen Terrain Tiles · Terrarium · teselas de elevación combinadas de varias fuentes abiertas.</span>
+                <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noreferrer">Fuentes y atribución de Mapzen</a>
               </div>
               <div className="copernicus-notice">
               <span>© DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.</span>
@@ -912,11 +1003,16 @@ export default function App() {
             drawingsLayer={drawingTools.layer}
             measurementsLayer={drawingTools.measurementLayer}
             preparedTerrains={preparedTerrainEntries}
+            explorationTerrainEnabled={explorationTerrainEnabled}
+            explorationTerrainOpacity={explorationTerrainOpacity}
+            regionalHillshadeVisible={hasVisibleRegionalHillshade}
             onStatusChange={handleMapStatus}
             onQgisStatusChange={handleQgisStatusChange}
             onOpenFreeMapStatusChange={handleOpenFreeMapStatusChange}
             onOverlayAvailabilityChange={handleOverlayAvailabilityChange}
             onTopographicAvailabilityChange={handleTopographicAvailabilityChange}
+            onExplorationTerrainStatusChange={handleExplorationTerrainStatusChange}
+            onExplorationTerrainVisibilityChange={handleExplorationTerrainVisibilityChange}
             onPreparedTerrainAvailabilityChange={handlePreparedTerrainAvailabilityChange}
             onMapReady={drawingTools.connectMap}
             onCenterChange={handleMapCenterChange}
