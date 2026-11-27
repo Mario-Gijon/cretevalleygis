@@ -96,6 +96,7 @@ const BASE_MAP_OPTIONS: Array<{ id: BaseMapId; title: string; description: strin
   { id: "liberty", title: "Detallado", description: "Calles y lugares" },
   { id: "osm", title: "OpenStreetMap", description: "Calles y lugares" },
   { id: "qgis", title: "Crete Valley GIS", description: "Cartografía propia · Natural Earth" },
+  { id: "topographic", title: "Topográfico", description: "Elevaciones y relieve del terreno" },
 ];
 
 const TOPOGRAPHIC_LAYER_OPTIONS = [
@@ -107,7 +108,7 @@ const TOPOGRAPHIC_LAYER_OPTIONS = [
 
 function explorationTerrainStatusMessage(status: ExplorationTerrainStatus, zoom: number): string {
   if (status === "disabled") return "Relieve y elevación de exploración desactivados.";
-  if (status === "scale") return `Disponible al acercar a zoom ${EXPLORATION_TERRAIN.minZoom}. No se solicitan teselas por debajo de esa escala.`;
+  if (status === "scale") return `Disponible al acercar a zoom ${EXPLORATION_TERRAIN.overlayMinZoom}. No se solicitan teselas por debajo de esa escala.`;
   if (status === "loading") return "Cargando teselas de relieve para esta vista…";
   if (status === "active") return "Topografía de exploración activa.";
   if (status === "overzoom") return `Activo hasta zoom ${EXPLORATION_TERRAIN.maxDataZoom}; ampliar más no añade detalle del terreno.`;
@@ -222,13 +223,16 @@ export default function App() {
 
   const handleOpenFreeMapStatusChange = useCallback((id: OpenFreeMapId, status: OpenFreeMapStatus) => {
     setOpenFreeMapStatus((current) => ({ ...current, [id]: status }));
+    const isTopographicBackground = baseMapRef.current === "topographic" && id === "positron";
     if (status === "error") {
-      setBaseMapNotice("No se pudo cargar el mapa vectorial. OpenStreetMap sigue disponible.");
+      setBaseMapNotice(isTopographicBackground
+        ? "No se pudo cargar el fondo vectorial; OpenStreetMap sigue disponible bajo el relieve."
+        : "No se pudo cargar el mapa vectorial. OpenStreetMap sigue disponible.");
       if (baseMapRef.current === id) {
         baseMapRef.current = "osm";
         setBaseMap("osm");
       }
-    } else if (status === "available" && baseMapRef.current === id) {
+    } else if (status === "available" && (baseMapRef.current === id || isTopographicBackground)) {
       setBaseMapNotice(null);
     }
   }, []);
@@ -432,7 +436,9 @@ export default function App() {
   const detailedCoverageRatio = getTerrainCoverageRatio(mapExtent, terrainCoverage);
   const hasDetailedCoverageForView = detailedCoverageRatio >= TERRAIN_VISIBILITY_THRESHOLDS.detailedMinViewCoverageRatio;
   const hasTopographicPreference = Object.values(topographicVisibility).some(Boolean);
-  const selectedVectorBaseMap = baseMap === "osm" || baseMap === "qgis" ? null : baseMap;
+  const selectedVectorBaseMap: OpenFreeMapId | null = baseMap === "topographic"
+    ? "positron"
+    : baseMap === "osm" || baseMap === "qgis" ? null : baseMap;
   const selectedVectorStatus = selectedVectorBaseMap ? openFreeMapStatus[selectedVectorBaseMap] : "idle";
   const selectedElement = drawingTools.selectedElementInfo;
   const selectedTerrainJob = selectedElement ? terrainJobs.jobs[selectedElement.id] : undefined;
@@ -458,7 +464,10 @@ export default function App() {
   const hasVisibleRegionalHillshade = preparedTerrainEntries.some((terrain) => (
     terrain.visible && terrain.visibility.hillshade
   ));
-  const suppressGlobalHillshade = explorationTerrainVisible || hasVisibleRegionalHillshade;
+  const topographicBasemapActive = baseMap === "topographic";
+  const suppressGlobalHillshade = topographicBasemapActive || explorationTerrainVisible || hasVisibleRegionalHillshade;
+  const showExplorationHillshadeControls = topographicBasemapActive || explorationTerrainEnabled;
+  const showExplorationElevationControls = topographicBasemapActive || explorationElevationEnabled;
   const explorationStatusMessage = explorationTerrainStatusMessage(explorationTerrainStatus, mapZoom);
   const formatElevation = (value: number) => Math.round(value).toLocaleString("es-ES");
   const absoluteLandGradient = elevationGradient(ABSOLUTE_ELEVATION_STOPS, 0, ABSOLUTE_ELEVATION_MAX_M);
@@ -466,13 +475,18 @@ export default function App() {
   const adaptiveLandGradient = `linear-gradient(90deg, ${ADAPTIVE_LAND_STOPS.map((stop) => (
     `${stop.color} ${(stop.position * 100).toFixed(2)}%`
   )).join(", ")})`;
-  const adaptiveScaleFallback = explorationElevationScale.requestedMode === "adaptive"
-    && explorationElevationScale.effectiveMode !== "adaptive";
-  const explorationScaleMessage = explorationElevationScale.requestedMode === "absolute"
+  const visibleExplorationScale = topographicBasemapActive
+    ? absoluteElevationScale()
+    : explorationElevationScale;
+  const visibleExplorationMode = topographicBasemapActive ? "absolute" : visibleExplorationScale.effectiveMode;
+  const visibleExplorationRequestedMode = topographicBasemapActive ? "absolute" : visibleExplorationScale.requestedMode;
+  const adaptiveScaleFallback = visibleExplorationScale.requestedMode === "adaptive"
+    && visibleExplorationScale.effectiveMode !== "adaptive";
+  const explorationScaleMessage = visibleExplorationScale.requestedMode === "absolute"
     ? "Escala absoluta fija; los colores son comparables entre regiones."
     : adaptiveScaleFallback
       ? "Muestra insuficiente; se mantiene la escala absoluta. Recalcula tras cargar más teselas."
-      : `Rango adaptativo fijado: ${formatElevation(explorationElevationScale.minM)}–${formatElevation(explorationElevationScale.maxM)} m. Recalcula tras cambiar de región; los colores no son comparables entre vistas.`;
+      : `Rango adaptativo fijado: ${formatElevation(visibleExplorationScale.minM)}–${formatElevation(visibleExplorationScale.maxM)} m. Recalcula tras cambiar de región; los colores no son comparables entre vistas.`;
   const regionalElevationGradient = regionalElevationStyle
     ? `linear-gradient(90deg, ${regionalElevationStyle.stops.map((stop) => (
       `${stop.color} ${(stop.position * 100).toFixed(2)}%`
@@ -524,7 +538,7 @@ export default function App() {
       const source = layer.getSource();
       if (!source) return;
       const supportsGlobalLayer = id === "hillshade" || id === "elevation";
-      const globalHillshadeBlocked = id === "hillshade" && suppressGlobalHillshade;
+      const globalHillshadeBlocked = topographicBasemapActive || (id === "hillshade" && suppressGlobalHillshade);
       const shouldRender = supportsGlobalLayer
         && terrainServiceState === "available"
         && topographicVisibility[id]
@@ -541,7 +555,7 @@ export default function App() {
       }
       if (layer.getVisible() !== shouldRender) layer.setVisible(shouldRender);
     });
-  }, [suppressGlobalHillshade, terrainRenderMode, terrainServiceState, topographicVisibility]);
+  }, [suppressGlobalHillshade, terrainRenderMode, terrainServiceState, topographicBasemapActive, topographicVisibility]);
 
   const handlePreparedTerrainAvailabilityChange = useCallback((elementId: string, id: TopographicLayerId, available: boolean) => {
     setPreparedTerrains((current) => {
@@ -763,12 +777,16 @@ export default function App() {
             <h2 className="eyebrow" id="base-layers-title">MAPA BASE</h2>
             <div className="base-map-options" role="radiogroup" aria-label="Mapa base">
               {BASE_MAP_OPTIONS.map((option) => {
-                const vectorId = option.id === "osm" || option.id === "qgis" ? null : option.id;
+                const vectorId: OpenFreeMapId | null = option.id === "topographic"
+                  ? "positron"
+                  : option.id === "osm" || option.id === "qgis" ? null : option.id;
                 const vectorStatus = vectorId ? openFreeMapStatus[vectorId] : "idle";
                 const subtitle = vectorStatus === "loading"
                   ? "Cargando estilo…"
                   : vectorStatus === "error"
-                    ? "No disponible · OpenStreetMap activo"
+                    ? option.id === "topographic"
+                      ? "Relieve sobre OpenStreetMap"
+                      : "No disponible · OpenStreetMap activo"
                     : option.id === "qgis" && qgisStatus === "error"
                       ? "Servicio no disponible"
                       : option.description;
@@ -832,20 +850,24 @@ export default function App() {
             <summary className="panel-group-summary"><span className="eyebrow" id="topography-title">TOPOGRAFÍA</span></summary>
             <details className="terrain-exploration-controls" open>
               <summary>Topografía del mapa</summary>
-              <p className="overlay-intro">Elevación y sombreado para explorar sin preparar un área.</p>
+              <p className="overlay-intro">{topographicBasemapActive
+                ? "El mapa base incluye relieve mundial y mantiene la cartografía de referencia."
+                : "Elevación y sombreado para explorar sin preparar un área."}</p>
               <div className="overlay-layer-row topographic-layer-row exploration-terrain-row">
                 <span className="overlay-symbol topographic-symbol topographic-symbol--hillshade" aria-hidden="true"><Mountain size={16} /></span>
                 <span className="layer-copy">
                   <span className="layer-title">Relieve sombreado</span>
-                  <span className="layer-subtitle">Resalta las formas del terreno</span>
+                  <span className="layer-subtitle">{topographicBasemapActive ? "Incluido en el mapa base" : "Resalta las formas del terreno"}</span>
                 </span>
-                <Switch
-                  checked={explorationTerrainEnabled}
-                  onCheckedChange={changeExplorationTerrainEnabled}
-                  aria-label={`${explorationTerrainEnabled ? "Desactivar" : "Activar"} relieve sombreado`}
-                />
+                {topographicBasemapActive
+                  ? <span className="topographic-layer-included">Activo</span>
+                  : <Switch
+                    checked={explorationTerrainEnabled}
+                    onCheckedChange={changeExplorationTerrainEnabled}
+                    aria-label={`${explorationTerrainEnabled ? "Desactivar" : "Activar"} relieve sombreado`}
+                  />}
               </div>
-              {explorationTerrainEnabled && (
+              {showExplorationHillshadeControls && (
                 <label className="topographic-opacity exploration-terrain-opacity" htmlFor="exploration-hillshade-opacity">
                   <span>Intensidad del sombreado</span><output htmlFor="exploration-hillshade-opacity">{explorationTerrainOpacity} %</output>
                   <input
@@ -864,15 +886,17 @@ export default function App() {
                 <span className="overlay-symbol topographic-symbol topographic-symbol--elevation" aria-hidden="true"><Layers size={16} /></span>
                 <span className="layer-copy">
                   <span className="layer-title">Elevación del terreno</span>
-                  <span className="layer-subtitle">Colores hipsométricos · metros</span>
+                  <span className="layer-subtitle">{topographicBasemapActive ? "Incluida · colores absolutos" : "Colores hipsométricos · metros"}</span>
                 </span>
-                <Switch
-                  checked={explorationElevationEnabled}
-                  onCheckedChange={changeExplorationElevationEnabled}
-                  aria-label={`${explorationElevationEnabled ? "Desactivar" : "Activar"} elevación del terreno`}
-                />
+                {topographicBasemapActive
+                  ? <span className="topographic-layer-included">Activa</span>
+                  : <Switch
+                    checked={explorationElevationEnabled}
+                    onCheckedChange={changeExplorationElevationEnabled}
+                    aria-label={`${explorationElevationEnabled ? "Desactivar" : "Activar"} elevación del terreno`}
+                  />}
               </div>
-              {explorationElevationEnabled && (
+              {showExplorationElevationControls && (
                 <>
                   <label className="topographic-opacity exploration-terrain-opacity" htmlFor="exploration-elevation-opacity">
                     <span>Opacidad de elevación</span><output htmlFor="exploration-elevation-opacity">{explorationElevationOpacity} %</output>
@@ -887,20 +911,24 @@ export default function App() {
                       aria-label="Opacidad de elevación"
                     />
                   </label>
-                  <label className="exploration-elevation-mode" htmlFor="exploration-elevation-mode">
-                    <span>Escala de color</span>
-                    <select
-                      id="exploration-elevation-mode"
-                      value={explorationElevationMode}
-                      onChange={(event) => changeExplorationElevationMode(event.currentTarget.value as ExplorationElevationMode)}
-                    >
-                      <option value="adaptive">Adaptativa regional</option>
-                      <option value="absolute">Absoluta · comparable</option>
-                    </select>
-                  </label>
+                  {topographicBasemapActive ? (
+                    <p className="exploration-elevation-mode-note">Escala absoluta · estable entre regiones</p>
+                  ) : (
+                    <label className="exploration-elevation-mode" htmlFor="exploration-elevation-mode">
+                      <span>Escala de color</span>
+                      <select
+                        id="exploration-elevation-mode"
+                        value={explorationElevationMode}
+                        onChange={(event) => changeExplorationElevationMode(event.currentTarget.value as ExplorationElevationMode)}
+                      >
+                        <option value="adaptive">Adaptativa regional</option>
+                        <option value="absolute">Absoluta · comparable</option>
+                      </select>
+                    </label>
+                  )}
                   <div
                     className="exploration-elevation-legend"
-                    aria-label={`Leyenda de elevación ${explorationElevationScale.effectiveMode === "adaptive" ? "adaptativa" : "absoluta"} en metros`}
+                    aria-label={`Leyenda de elevación ${visibleExplorationMode === "adaptive" ? "adaptativa" : "absoluta"} en metros`}
                   >
                     <span className="elevation-legend-title">Elevación del mapa · m</span>
                     <div className="exploration-elevation-legend__bands">
@@ -911,8 +939,8 @@ export default function App() {
                       </div>
                       <div className="exploration-elevation-legend__band">
                         <div className="exploration-elevation-legend__band-heading">
-                          <span>Terreno · {explorationElevationScale.effectiveMode === "adaptive" ? "adaptativo" : "absoluto"}</span>
-                          {explorationElevationScale.requestedMode === "adaptive" && (
+                          <span>Terreno · {visibleExplorationMode === "adaptive" ? "adaptativo" : "absoluto"}</span>
+                          {visibleExplorationRequestedMode === "adaptive" && (
                             <Button
                               variant="ghost"
                               size="small"
@@ -926,11 +954,11 @@ export default function App() {
                           )}
                         </div>
                         <i
-                          style={{ background: explorationElevationScale.effectiveMode === "adaptive" ? adaptiveLandGradient : absoluteLandGradient }}
+                          style={{ background: visibleExplorationMode === "adaptive" ? adaptiveLandGradient : absoluteLandGradient }}
                           aria-hidden="true"
                         />
-                        {explorationElevationScale.effectiveMode === "adaptive" ? (
-                          <div className="exploration-elevation-legend__values"><span>&lt; {formatElevation(explorationElevationScale.minM)} m</span><span>&gt; {formatElevation(explorationElevationScale.maxM)} m</span></div>
+                        {visibleExplorationMode === "adaptive" ? (
+                          <div className="exploration-elevation-legend__values"><span>&lt; {formatElevation(visibleExplorationScale.minM)} m</span><span>&gt; {formatElevation(visibleExplorationScale.maxM)} m</span></div>
                         ) : (
                           <div className="exploration-elevation-legend__values"><span>0 m</span><span>1 500 m</span><span>≥ {formatElevation(ABSOLUTE_ELEVATION_MAX_M)} m</span></div>
                         )}
@@ -1028,13 +1056,14 @@ export default function App() {
                   const layer = TOPOGRAPHIC_LAYERS[id];
                   const opacityId = `global-${id}-opacity`;
                   return <div className="topographic-layer-card" key={id}>
-                    <div className="overlay-layer-row topographic-layer-row"><span className={`overlay-symbol topographic-symbol topographic-symbol--${id}`} aria-hidden="true"><Icon size={16} /></span><span className="layer-copy"><span className="layer-title">{layer.title}</span><span className="layer-subtitle">{layer.description}</span></span><Switch checked={topographicVisibility[id]} disabled={terrainServiceState !== "available"} onCheckedChange={(visible) => changeTopographicVisibility(id, visible)} aria-label={`${topographicVisibility[id] ? "Ocultar" : "Mostrar"} relieve mundial`} /></div>
+                    <div className="overlay-layer-row topographic-layer-row"><span className={`overlay-symbol topographic-symbol topographic-symbol--${id}`} aria-hidden="true"><Icon size={16} /></span><span className="layer-copy"><span className="layer-title">{layer.title}</span><span className="layer-subtitle">{layer.description}</span></span><Switch checked={topographicVisibility[id]} disabled={terrainServiceState !== "available" || topographicBasemapActive} onCheckedChange={(visible) => changeTopographicVisibility(id, visible)} aria-label={`${topographicVisibility[id] ? "Ocultar" : "Mostrar"} relieve mundial`} /></div>
                     {topographicVisibility[id] && <label className="topographic-opacity" htmlFor={opacityId}><span>Opacidad</span><output htmlFor={opacityId}>{topographicOpacity[id]} %</output><input id={opacityId} type="range" min="0" max="100" step="5" value={topographicOpacity[id]} onChange={(event) => changeTopographicOpacity(id, Number(event.currentTarget.value))} aria-label={`Opacidad de ${layer.title.toLowerCase()}`} /></label>}
                     {topographicVisibility[id] && !topographicAvailability[id] && <p className="topographic-layer-error" role="status">Esta capa mundial no está disponible ahora mismo.</p>}
                   </div>;
                 })}
               </div>
-              {topographicVisibility.hillshade && suppressGlobalHillshade && <p className="terrain-coverage-note">El sombreado ETOPO se oculta mientras se muestra el relieve de exploración o un terreno detallado.</p>}
+              {topographicBasemapActive && <p className="terrain-coverage-note">ETOPO queda en pausa mientras el mapa base Topográfico ya muestra elevación y sombreado.</p>}
+              {!topographicBasemapActive && topographicVisibility.hillshade && suppressGlobalHillshade && <p className="terrain-coverage-note">El sombreado ETOPO se oculta mientras se muestra el relieve de exploración o un terreno detallado.</p>}
               {topographicVisibility.elevation && terrainCoverage && terrainRenderMode !== "hidden" && <div className="elevation-legend"><span className="elevation-legend-title">Elevación mundial · altura y profundidad (m)</span><div className="elevation-legend-values"><span>{Math.round(terrainCoverage.minElevation)} m</span><span>0 m</span><span>{Math.round(terrainCoverage.maxElevation)} m</span></div></div>}
               {terrainServiceState === "unavailable" && <p className="terrain-coverage-note terrain-coverage-note--error">Relieve mundial no disponible; las áreas preparadas siguen funcionando.</p>}
               {terrainServiceState === "available" && terrainCoverage && <p className="terrain-coverage-note">{!hasTopographicPreference ? "Relieve mundial desactivado." : terrainRenderMode === "hidden" ? "Relieve mundial oculto por escala." : terrainRenderMode === "detailed" ? "Copernicus 30 m disponible en esta vista." : hasDetailedCoverageForView ? "ETOPO 60″ visible; el detalle aparece al acercar." : "ETOPO 60″ visible; no hay cobertura detallada suficiente."}</p>}

@@ -811,6 +811,26 @@ button {
   padding: 5px 0 3px;
 }
 
+.topographic-layer-included {
+  justify-self: end;
+  padding: 3px 6px;
+  border: 1px solid color-mix(in srgb, var(--cv-teal) 35%, var(--border));
+  border-radius: 999px;
+  color: var(--cv-blue);
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.app-shell[data-theme="dark"] .topographic-layer-included {
+  color: #91dedb;
+}
+
+.exploration-elevation-mode-note {
+  margin: 9px 2px 0;
+  color: var(--muted);
+  font-size: 9px;
+}
+
 .exploration-terrain-status {
   margin: 6px 0 0;
   color: var(--muted);
@@ -1377,6 +1397,12 @@ button {
   --preview-background: #f3eee4;
   --preview-road: #d5e7e4;
   --preview-road-secondary: #88a67d;
+}
+
+.base-map-preview--topographic {
+  --preview-background: repeating-radial-gradient(ellipse at 56% 52%, transparent 0 2px, rgb(255 255 255 / 35%) 2.5px 3px), linear-gradient(135deg, #6b9a69, #b9bb79 48%, #b47c68 75%, #745879);
+  --preview-road: #f4e7c2;
+  --preview-road-secondary: #597e68;
 }
 
 .base-map-loading {

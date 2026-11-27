@@ -1,6 +1,8 @@
 export const EXPLORATION_TERRAIN = {
   url: "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png",
-  minZoom: 8,
+  mapMinimumZoom: 2,
+  overlayMinZoom: 4,
+  topographicBasemapMinZoom: 2,
   maxDataZoom: 15,
   cacheSize: 96,
   sampleCacheSize: 96,

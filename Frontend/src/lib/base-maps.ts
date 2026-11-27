@@ -17,7 +17,7 @@ export const OPEN_FREE_MAP_STYLES = {
 } as const;
 
 export type OpenFreeMapId = keyof typeof OPEN_FREE_MAP_STYLES;
-export type BaseMapId = "osm" | "qgis" | OpenFreeMapId;
+export type BaseMapId = "osm" | "qgis" | "topographic" | OpenFreeMapId;
 export type OpenFreeMapStatus = "idle" | "loading" | "available" | "error";
 
 export const OPEN_FREE_MAP_ATTRIBUTION_HTML =

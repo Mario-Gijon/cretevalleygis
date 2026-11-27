@@ -451,7 +451,7 @@ export default function MapView({
         style: createShadedReliefStyle(),
         visible: false,
         opacity: 1,
-        minZoom: EXPLORATION_TERRAIN.minZoom - 0.001,
+        minZoom: EXPLORATION_TERRAIN.mapMinimumZoom - 0.001,
         cacheSize: EXPLORATION_TERRAIN.cacheSize,
         preload: 0,
         zIndex: 3,
@@ -493,7 +493,7 @@ export default function MapView({
       view: new View({
         center: fromLonLat([-4.6, 37.55]),
         zoom: 8.2,
-        minZoom: 2,
+        minZoom: EXPLORATION_TERRAIN.mapMinimumZoom,
         maxZoom: 19,
         enableRotation: false,
       }),
@@ -507,13 +507,14 @@ export default function MapView({
       const layer = explorationTerrainRef.current;
       if (!layer) return;
       const scale = explorationElevationScaleRef.current;
+      const isTopographicBasemap = activeBaseMapRef.current === "topographic";
       layer.updateStyleVariables({
         groundResolution: Math.max(0.1, resolution * Math.max(0.05, Math.cos((latitude * Math.PI) / 180))),
-        showHillshade: explorationEnabledRef.current ? 1 : 0,
-        showElevation: explorationElevationEnabledRef.current ? 1 : 0,
+        showHillshade: isTopographicBasemap || explorationEnabledRef.current ? 1 : 0,
+        showElevation: isTopographicBasemap || explorationElevationEnabledRef.current ? 1 : 0,
         hillshadeOpacity: explorationOpacityRef.current / 100,
         elevationOpacity: explorationElevationOpacityRef.current / 100,
-        adaptiveScale: scale.effectiveMode === "adaptive" ? 1 : 0,
+        adaptiveScale: !isTopographicBasemap && scale.effectiveMode === "adaptive" ? 1 : 0,
         adaptiveMin: scale.minM,
         adaptiveMax: Math.max(scale.maxM, scale.minM + EXPLORATION_TERRAIN.minimumDisplayRangeM),
       });
@@ -585,6 +586,11 @@ export default function MapView({
       }, EXPLORATION_TERRAIN.sampleSettleDelayMs);
     };
     const requestElevationScaleUpdate = () => {
+      if (activeBaseMapRef.current === "topographic") {
+        adaptiveCalculationPending = false;
+        if (elevationScaleTimer) clearTimeout(elevationScaleTimer);
+        return;
+      }
       if (explorationElevationModeRef.current === "absolute") {
         adaptiveCalculationPending = false;
         if (elevationScaleTimer) clearTimeout(elevationScaleTimer);
@@ -621,10 +627,14 @@ export default function MapView({
     const updateExplorationVisibility = (zoom: number, latitude: number, resolution: number) => {
       const layer = explorationTerrainRef.current;
       const hasWebGL = layer !== null;
-      const scaleReady = zoom >= EXPLORATION_TERRAIN.minZoom;
-      const blockedByRegionalRelief = regionalHillshadeRef.current;
-      const hillshadeEnabled = explorationEnabledRef.current;
-      const elevationEnabled = explorationElevationEnabledRef.current;
+      const isTopographicBasemap = activeBaseMapRef.current === "topographic";
+      const minimumZoom = isTopographicBasemap
+        ? EXPLORATION_TERRAIN.topographicBasemapMinZoom
+        : EXPLORATION_TERRAIN.overlayMinZoom;
+      const scaleReady = zoom >= minimumZoom;
+      const blockedByRegionalRelief = regionalHillshadeRef.current && !isTopographicBasemap;
+      const hillshadeEnabled = isTopographicBasemap || explorationEnabledRef.current;
+      const elevationEnabled = isTopographicBasemap || explorationElevationEnabledRef.current;
       const visible = Boolean(
         layer
         && (hillshadeEnabled || elevationEnabled)
@@ -658,7 +668,7 @@ export default function MapView({
       explorationHasLoadedRef.current = true;
       explorationHasErrorRef.current = false;
       if (!explorationLayer?.getVisible()) return;
-      const zoom = mapZoomRef.current ?? EXPLORATION_TERRAIN.minZoom;
+      const zoom = mapZoomRef.current ?? EXPLORATION_TERRAIN.mapMinimumZoom;
       explorationStatusRef.current?.(zoom > EXPLORATION_TERRAIN.maxDataZoom ? "overzoom" : "active");
     };
     const explorationTileFailed = () => {
@@ -879,13 +889,26 @@ export default function MapView({
     const layers = baseLayersRef.current;
     if (!layers) return;
 
-    const activate = (id: BaseMapId) => {
-      layers.osm.setVisible(id === "osm");
+    const activate = (id: BaseMapId, forceOsmUnderlay = false) => {
+      const styleId: OpenFreeMapId | null = id === "topographic"
+        ? "positron"
+        : id === "osm" || id === "qgis" ? null : id;
+      const useVectorUnderlay = Boolean(styleId && vectorLoadedRef.current.has(styleId) && !forceOsmUnderlay);
+      layers.osm.setVisible(id === "osm" || (id === "topographic" && !useVectorUnderlay));
       layers.qgis.setVisible(id === "qgis");
       (Object.keys(layers.vector) as OpenFreeMapId[]).forEach((vectorId) => {
-        layers.vector[vectorId].setVisible(vectorId === id);
+        layers.vector[vectorId].setVisible(vectorId === styleId && useVectorUnderlay);
       });
       activeBaseMapRef.current = id;
+      const view = mapRef.current?.getView();
+      const center = view?.getCenter();
+      if (view) {
+        updateExplorationRef.current?.(
+          view.getZoom() ?? 0,
+          center ? toLonLat(center)[1] : 0,
+          view.getResolution() ?? 1,
+        );
+      }
       mapRef.current?.render();
     };
 
@@ -894,17 +917,18 @@ export default function MapView({
       return;
     }
 
-    const group = layers.vector[baseMap];
-    if (vectorLoadedRef.current.has(baseMap)) {
+    const styleId: OpenFreeMapId = baseMap === "topographic" ? "positron" : baseMap;
+    const group = layers.vector[styleId];
+    if (baseMap === "topographic") activate(baseMap);
+    if (vectorLoadedRef.current.has(styleId)) {
       activate(baseMap);
-      onOpenFreeMapStatusChange(baseMap, "available");
+      onOpenFreeMapStatusChange(styleId, "available");
       return;
     }
 
-    onOpenFreeMapStatusChange(baseMap, "loading");
-    if (vectorPromisesRef.current.has(baseMap)) return;
+    onOpenFreeMapStatusChange(styleId, "loading");
+    if (vectorPromisesRef.current.has(styleId)) return;
 
-    const styleId = baseMap;
     const styleUrl = OPEN_FREE_MAP_STYLES[styleId].url;
     let loadPromise: Promise<void>;
     loadPromise = import("ol-mapbox-style")
@@ -931,8 +955,11 @@ export default function MapView({
             failedTiles = 0;
             if (errorTimer) clearTimeout(errorTimer);
             errorTimer = undefined;
-            if (activeBaseMapRef.current === styleId) {
+            const isActiveBackground = activeBaseMapRef.current === styleId
+              || (styleId === "positron" && activeBaseMapRef.current === "topographic");
+            if (isActiveBackground) {
               onOpenFreeMapStatusChange(styleId, "available");
+              if (activeBaseMapRef.current === "topographic") activate("topographic");
             }
           };
           const onError = () => {
@@ -940,8 +967,11 @@ export default function MapView({
             if (errorTimer) return;
             errorTimer = setTimeout(() => {
               errorTimer = undefined;
-              if (failedTiles > 0 && activeBaseMapRef.current === styleId) {
+              const isActiveBackground = activeBaseMapRef.current === styleId
+                || (styleId === "positron" && activeBaseMapRef.current === "topographic");
+              if (failedTiles > 0 && isActiveBackground) {
                 onOpenFreeMapStatusChange(styleId, "error");
+                if (activeBaseMapRef.current === "topographic") activate("topographic", true);
               }
             }, 2500);
           };
@@ -956,7 +986,7 @@ export default function MapView({
         vectorTileListenersRef.current.set(styleId, cleanups);
 
         onOpenFreeMapStatusChange(styleId, "available");
-        if (baseMapRef.current === styleId) activate(styleId);
+        if (baseMapRef.current === baseMap) activate(baseMap);
       })
       .catch(() => {
         group.getLayers().clear();
@@ -968,7 +998,10 @@ export default function MapView({
         }
         vectorLoadedRef.current.delete(styleId);
         vectorPromisesRef.current.delete(styleId);
-        if (!disposedRef.current) onOpenFreeMapStatusChange(styleId, "error");
+        if (!disposedRef.current) {
+          onOpenFreeMapStatusChange(styleId, "error");
+          if (baseMapRef.current === "topographic") activate("topographic", true);
+        }
       });
     vectorPromisesRef.current.set(styleId, loadPromise);
   }, [baseLayersRef, baseMap, mapGeneration, mapRef, onOpenFreeMapStatusChange]);
