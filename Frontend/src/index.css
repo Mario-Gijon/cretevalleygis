@@ -217,7 +217,7 @@ button {
 
 .panel-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 3px;
   margin: 0 14px 12px;
   padding: 3px;
@@ -402,7 +402,6 @@ button {
 .topography-display-settings > summary:focus-visible,
 .terrain-region-adjustments > summary:focus-visible,
 .analysis-terrain-advanced > summary:focus-visible,
-.terrain-preparation-limits > summary:focus-visible,
 .drawn-element-menu > summary:focus-visible {
   outline: 2px solid var(--cv-teal);
   outline-offset: 2px;
@@ -510,8 +509,7 @@ button {
 }
 
 .geometry-metrics-note > summary,
-.analysis-terrain-advanced > summary,
-.terrain-preparation-limits > summary {
+.analysis-terrain-advanced > summary {
   width: fit-content;
   color: var(--muted);
   font-size: 10px;
@@ -519,85 +517,11 @@ button {
 }
 
 .geometry-metrics-note > p,
-.analysis-terrain-advanced > p,
-.terrain-preparation-limits > p {
+.analysis-terrain-advanced > p {
   margin: 6px 0 0;
   color: var(--muted);
   font-size: 10px;
   line-height: 1.45;
-}
-
-.terrain-preparation-card {
-  display: grid;
-  gap: 7px;
-  margin-top: 2px;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--surface-raised);
-}
-
-.terrain-preparation-heading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.terrain-preparation-heading h3 {
-  margin: 0;
-  color: var(--text);
-  font-size: 11px;
-  font-weight: 620;
-}
-
-.terrain-preparation-heading p,
-.terrain-preparation-heading > div > p {
-  margin: 3px 0 0;
-  color: var(--muted);
-  font-size: 9px;
-  line-height: 1.45;
-}
-
-.terrain-preparation-status {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin: 0;
-  color: var(--muted);
-  font-size: 9px;
-  line-height: 1.45;
-}
-
-.terrain-preparation-status svg {
-  flex: 0 0 auto;
-  margin-top: 1px;
-}
-
-.terrain-preparation-status--ready {
-  color: #276b55;
-}
-
-.terrain-preparation-status--error {
-  color: #a8433d;
-}
-
-.app-shell[data-theme="dark"] .terrain-preparation-status--ready {
-  color: #9dd7bb;
-}
-
-.app-shell[data-theme="dark"] .terrain-preparation-status--error {
-  color: #ffc2bd;
-}
-
-.terrain-preparation-button {
-  width: 100%;
-  justify-content: center;
-}
-
-.terrain-preparation-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .drawn-elements-heading {
@@ -777,35 +701,6 @@ button {
   color: var(--text);
   font: inherit;
   font-size: 11px;
-}
-
-.drawn-element-terrain {
-  display: inline;
-  color: var(--muted);
-  font-size: 9px;
-  line-height: 1.25;
-  overflow-wrap: anywhere;
-}
-
-.drawn-element-terrain--ready {
-  color: #276b55;
-}
-
-.drawn-element-terrain--visible {
-  color: #276b55;
-}
-
-.drawn-element-terrain--hidden {
-  color: var(--muted);
-}
-
-.drawn-element-terrain--error,
-.drawn-element-terrain--unavailable {
-  color: #a8433d;
-}
-
-.drawn-element-terrain--stale {
-  color: #98651f;
 }
 
 .drawn-element-button:hover,

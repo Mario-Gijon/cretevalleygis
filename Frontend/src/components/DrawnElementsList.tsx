@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Check, Ellipsis, MapPin, Pencil, Pentagon, Route, Trash2, X } from "lucide-react";
 import type { DrawnElement } from "@/hooks/useDrawingTools";
-import type { TerrainPreparationView } from "@/lib/terrain-preparation";
 import { formatArea, formatCoordinate, formatDistance } from "@/lib/geometry-metrics";
 
 type DrawnElementsListProps = {
@@ -10,7 +9,6 @@ type DrawnElementsListProps = {
   onFocus: (id: string) => void;
   onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
-  terrainJobs: Record<string, TerrainPreparationView | undefined>;
 };
 
 const geometryLabels = {
@@ -19,7 +17,7 @@ const geometryLabels = {
   Polygon: "Área",
 } as const;
 
-export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, onDelete, terrainJobs }: DrawnElementsListProps) {
+export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, onDelete }: DrawnElementsListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
 
@@ -45,28 +43,6 @@ export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, on
                 : element.geometryInfo?.kind === "Polygon"
                   ? formatArea(element.geometryInfo.area)
                   : null;
-            const job = terrainJobs[element.id];
-            const resultExtent = job?.result?.coverage.extent_wgs84;
-            const preparedMatches = Boolean(element.bboxWgs84 && resultExtent && element.bboxWgs84.every((value, index) => Math.abs(value - resultExtent[index]) < 1e-7));
-            const terrainStatus = element.geometryType !== "Polygon"
-              ? null
-              : job?.state === "completed" && preparedMatches
-                ? `Datos listos · ${job.result?.coverage.resolution_m ?? 30} m`
-                : job?.state === "completed"
-                  ? "Área modificada · volver a preparar"
-                  : job?.state === "running" || job?.state === "submitting"
-                    ? "Preparando datos…"
-                    : job?.state === "error"
-                      ? "Error al preparar datos"
-                      : "Datos de terreno sin preparar";
-            const statusClass = job?.state === "completed" && preparedMatches
-              ? "ready"
-              : job?.state === "completed"
-                ? "stale"
-                : job?.state === "error"
-                  ? "error"
-                  : job?.state ?? "idle";
-
             return (
               <li className="drawn-element-card" key={element.id}>
                 {editingId === element.id ? (
@@ -89,7 +65,7 @@ export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, on
                       type="button"
                       className="drawn-element-button"
                       aria-pressed={selectedIds.includes(element.id)}
-                      aria-label={`Abrir propiedades de ${element.name}${terrainStatus ? `, ${terrainStatus}` : ""}`}
+                      aria-label={`Abrir propiedades de ${element.name}`}
                       onClick={() => onFocus(element.id)}
                     >
                       <span className="drawn-element-icon" aria-hidden="true"><Icon size={16} /></span>
@@ -98,7 +74,6 @@ export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, on
                         <span className="drawn-element-meta">
                           <span className="drawn-element-type">{geometryLabels[element.geometryType]}</span>
                           {measure && <span className="drawn-element-measure">{measure}</span>}
-                          {terrainStatus && <span className={`drawn-element-terrain drawn-element-terrain--${statusClass}`}>{terrainStatus}</span>}
                         </span>
                       </span>
                     </button>

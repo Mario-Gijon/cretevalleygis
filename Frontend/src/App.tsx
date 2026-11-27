@@ -22,7 +22,6 @@ import {
   X,
 } from "lucide-react";
 import { fromLonLat } from "ol/proj.js";
-import Polygon from "ol/geom/Polygon.js";
 import type OlMap from "ol/Map.js";
 import MapView, { type BaseMapLayers, type MapStatus, type QgisStatus } from "@/components/MapView";
 import { OPEN_FREE_MAP_STYLES, type BaseMapId, type OpenFreeMapId, type OpenFreeMapStatus } from "@/lib/base-maps";
@@ -32,7 +31,6 @@ import { DrawingToolbar } from "@/components/DrawingToolbar";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useDrawingTools } from "@/hooks/useDrawingTools";
-import { useTerrainPreparation } from "@/hooks/useTerrainPreparation";
 import { CRETE_CENTER } from "@/lib/map-config";
 import { formatCoordinate } from "@/lib/geometry-metrics";
 import {
@@ -41,7 +39,6 @@ import {
   type GeographicOverlayId,
   type GeographicOverlayVisibility,
 } from "@/lib/cartographic-layers";
-import type { TerrainPreparationView } from "@/lib/terrain-preparation";
 import {
   EXPLORATION_TERRAIN,
   ABSOLUTE_ELEVATION_MAX_M,
@@ -107,7 +104,6 @@ export default function App() {
   const mapRef = useRef<OlMap | null>(null);
   const baseLayersRef = useRef<BaseMapLayers | null>(null);
   const drawingTools = useDrawingTools();
-  const terrainJobs = useTerrainPreparation();
   const [theme, setTheme] = useState<ThemeMode>(initialTheme);
   const [panelOpen, setPanelOpen] = useState(
     () => !window.matchMedia("(max-width: 720px)").matches,
@@ -141,7 +137,6 @@ export default function App() {
   );
   const [explorationElevationScaleRefresh, setExplorationElevationScaleRefresh] = useState(0);
   const [explorationTerrainStatus, setExplorationTerrainStatus] = useState<ExplorationTerrainStatus>("loading");
-  const terrainRequestRevisionsRef = useRef(new globalThis.Map<string, number>());
   const [mapZoom, setMapZoom] = useState(8.2);
   const [qgisStatus, setQgisStatus] = useState<QgisStatus>("idle");
   const [mapStatus, setMapStatus] = useState<MapStatus>({
@@ -255,20 +250,6 @@ export default function App() {
       : scale);
   }, []);
 
-  const handlePrepareTerrain = useCallback((elementId: string, areaName: string, bbox: [number, number, number, number]) => {
-    const geometry = drawingTools.layer.getSource()?.getFeatureById(elementId)?.getGeometry();
-    if (!(geometry instanceof Polygon)) return;
-    terrainRequestRevisionsRef.current.set(elementId, geometry.getRevision());
-    void terrainJobs.prepareTerrain(elementId, areaName, bbox);
-  }, [drawingTools.layer, terrainJobs.prepareTerrain]);
-
-  const handlePrepareDerivatives = useCallback(async (elementId: string, jobId: string) => {
-    const geometry = drawingTools.layer.getSource()?.getFeatureById(elementId)?.getGeometry();
-    const expectedRevision = terrainRequestRevisionsRef.current.get(elementId);
-    if (!(geometry instanceof Polygon) || expectedRevision === undefined || geometry.getRevision() !== expectedRevision) return;
-    await terrainJobs.prepareDerivatives(elementId, jobId);
-  }, [drawingTools.layer, terrainJobs.prepareDerivatives]);
-
   const handleOverlayAvailabilityChange = useCallback((id: GeographicOverlayId, available: boolean) => {
     setOverlayAvailability((current) => current[id] === available ? current : { ...current, [id]: available });
   }, []);
@@ -278,15 +259,6 @@ export default function App() {
     : baseMap === "osm" || baseMap === "qgis" ? null : baseMap;
   const selectedVectorStatus = selectedVectorBaseMap ? openFreeMapStatus[selectedVectorBaseMap] : "idle";
   const selectedElement = drawingTools.selectedElementInfo;
-  const selectedTerrainJob = selectedElement ? terrainJobs.jobs[selectedElement.id] : undefined;
-  const selectedTerrainMatches = Boolean(
-    selectedElement?.bboxWgs84 && selectedTerrainJob?.result && selectedElement.bboxWgs84.every((coordinate, index) => (
-      Math.abs(coordinate - selectedTerrainJob.result!.coverage.extent_wgs84[index]) < 1e-7
-    )),
-  );
-  const selectedTerrainPreparation: TerrainPreparationView | undefined = selectedTerrainJob?.state === "completed" && !selectedTerrainMatches
-    ? { state: "error", message: "El área cambió después de preparar estos datos. Vuelve a preparar el terreno." }
-    : selectedTerrainJob;
   const explorationStatusMessage = explorationTerrainStatusMessage(explorationTerrainStatus, mapZoom);
   const formatElevation = (value: number) => Math.round(value).toLocaleString("es-ES");
   const absoluteLandGradient = elevationGradient(ABSOLUTE_ELEVATION_STOPS, 0, ABSOLUTE_ELEVATION_MAX_M);
@@ -306,19 +278,6 @@ export default function App() {
     setAreaPanelView("detail");
     setPanelOpen(true);
   }, [selectedElement]);
-
-  useEffect(() => {
-    const source = drawingTools.layer.getSource();
-    const invalidIds = new Set<string>();
-    terrainRequestRevisionsRef.current.forEach((revision, id) => {
-      const geometry = source?.getFeatureById(id)?.getGeometry();
-      if (!(geometry instanceof Polygon) || geometry.getRevision() !== revision) invalidIds.add(id);
-    });
-    invalidIds.forEach((id) => {
-      terrainRequestRevisionsRef.current.delete(id);
-      terrainJobs.removeJob(id);
-    });
-  }, [drawingTools.elements, drawingTools.layer, terrainJobs.removeJob]);
 
   const changeZoom = (amount: number) => {
     const view = mapRef.current?.getView();
@@ -582,7 +541,7 @@ export default function App() {
             </div>
           </details>
 
-          <details className="panel-group topography-section" open>
+          {baseMap === "topographic" && <details className="panel-group topography-section" open>
             <summary className="panel-group-summary"><span className="eyebrow" id="topography-title">TOPOGRAFÍA</span></summary>
             <section className="terrain-exploration-controls" aria-label="Topografía del mapa completo">
               <div className="topography-subheading">
@@ -689,7 +648,7 @@ export default function App() {
                 </div>
               </details>
             </section>
-          </details>
+          </details>}
             </>
           )}
 
@@ -699,14 +658,10 @@ export default function App() {
             onFocus={openAreaDetails}
             onRename={drawingTools.renameElement}
             onDelete={drawingTools.deleteElement}
-            terrainJobs={terrainJobs.jobs}
           /> : <GeometryDetails
             element={selectedElement}
             onBackToList={() => setAreaPanelView("list")}
             onRename={drawingTools.renameElement}
-            terrainPreparation={selectedTerrainPreparation}
-            onPrepareTerrain={handlePrepareTerrain}
-            onPrepareDerivatives={(id, jobId) => void handlePrepareDerivatives(id, jobId)}
           />)}
           </div>
 

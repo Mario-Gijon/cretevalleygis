@@ -550,7 +550,8 @@ export default function MapView({
     const updateExplorationVisibility = (zoom: number, latitude: number, resolution: number) => {
       const layer = explorationTerrainRef.current;
       const hasWebGL = layer !== null;
-      const minimumZoom = activeBaseMapRef.current === "topographic"
+      const isTopographicBasemap = activeBaseMapRef.current === "topographic";
+      const minimumZoom = isTopographicBasemap
         ? EXPLORATION_TERRAIN.topographicBasemapMinZoom
         : EXPLORATION_TERRAIN.overlayMinZoom;
       const scaleReady = zoom >= minimumZoom;
@@ -558,6 +559,7 @@ export default function MapView({
       const elevationEnabled = explorationElevationEnabledRef.current;
       const visible = Boolean(
         layer
+        && isTopographicBasemap
         && (hillshadeEnabled || elevationEnabled)
         && scaleReady,
       );
@@ -566,6 +568,7 @@ export default function MapView({
         updateExplorationStyle(resolution, latitude);
       }
       if (!hasWebGL) explorationStatusRef.current?.("unavailable");
+      else if (!isTopographicBasemap) explorationStatusRef.current?.("disabled");
       else if (!hillshadeEnabled && !elevationEnabled) explorationStatusRef.current?.("disabled");
       else if (!scaleReady) explorationStatusRef.current?.("scale");
       else if (explorationHasErrorRef.current) explorationStatusRef.current?.("error");
@@ -796,6 +799,21 @@ export default function MapView({
       }
       mapRef.current?.render();
     };
+
+    if (baseMap !== "topographic") {
+      activeBaseMapRef.current = baseMap;
+      layers.explorationTerrain?.setVisible(false);
+      const view = mapRef.current?.getView();
+      const center = view?.getCenter();
+      if (view) {
+        updateExplorationRef.current?.(
+          view.getZoom() ?? 0,
+          center ? toLonLat(center)[1] : 0,
+          view.getResolution() ?? 1,
+        );
+      }
+      mapRef.current?.render();
+    }
 
     if (baseMap === "osm" || baseMap === "qgis") {
       activate(baseMap);
