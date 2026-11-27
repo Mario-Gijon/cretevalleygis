@@ -18,12 +18,36 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from terrain_request import selected_tiles, validate_bbox_values
+from terrain_request import (
+    MAX_BBOX_SPAN_DEGREES,
+    MAX_RASTER_PIXELS,
+    MAX_TILES_PER_RUN,
+    selected_tiles,
+    validate_bbox_values,
+)
+from terrain_style_config import REGIONAL_ELEVATION_STYLE_VERSION, regional_elevation_style
 
 
 REGION_ROOT = Path(os.environ.get("TERRAIN_REGION_ROOT", "/io/data/terrain/regions"))
 SCRIPT_PATH = Path(os.environ.get("TERRAIN_SCRIPT_PATH", "/io/scripts/prepare-terrain.py"))
+STYLE_REFRESH_SCRIPT_PATH = Path(os.environ.get(
+    "TERRAIN_STYLE_REFRESH_SCRIPT_PATH", "/io/scripts/refresh-terrain-style.py"
+))
 WMS_URL = os.environ.get("PUBLIC_QGIS_WMS_URL", "http://localhost:8085/ogc/world")
+
+
+def positive_timeout(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, default))
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be a positive integer") from error
+    if value <= 0:
+        raise RuntimeError(f"{name} must be a positive integer")
+    return value
+
+
+JOB_TIMEOUT_SECONDS = positive_timeout("TERRAIN_JOB_TIMEOUT_SECONDS", 1800)
+STYLE_REFRESH_TIMEOUT_SECONDS = positive_timeout("TERRAIN_STYLE_REFRESH_TIMEOUT_SECONDS", 120)
 
 REGION_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -136,6 +160,7 @@ def make_cartography_reference(project_path: Path, script_result: dict[str, Any]
             "resolution_m": script_result["resolution_m"],
             "elevation_min_m": script_result["elevation_min_m"],
             "elevation_max_m": script_result["elevation_max_m"],
+            "elevation_style": script_result["elevation_style"],
             "horizontal_crs": script_result["crs"],
             "vertical_datum": script_result["vertical_datum"],
             "nodata": script_result["nodata"],
@@ -197,7 +222,6 @@ def load_persisted_job(job_id: str) -> TerrainJob | None:
         coverage = result["coverage"]
         area_name = coverage["area_name"]
         bbox = validate_bbox_values(coverage["extent_wgs84"])
-        selected_tiles(bbox)
         if saved.get("job_id") != job_id or request_id_for(area_name, bbox) != job_id:
             return None
         result.setdefault("preparation", {})["reused"] = True
@@ -258,6 +282,7 @@ def execute_job(job: TerrainJob) -> None:
             encoding="utf-8",
             errors="replace",
             env=environment,
+            timeout=JOB_TIMEOUT_SECONDS,
         )
         if completed.returncode != 0:
             diagnostic = (completed.stderr or completed.stdout or "Terrain preparation failed.").strip()
@@ -277,7 +302,86 @@ def execute_job(job: TerrainJob) -> None:
             job.status = "completed"
             job.completed_at = datetime.now(timezone.utc).isoformat()
             write_persisted_job(job)
+    except subprocess.TimeoutExpired:
+        with jobs_lock:
+            job.status = "failed"
+            job.completed_at = datetime.now(timezone.utc).isoformat()
+            job.error = f"Terrain preparation exceeded the {JOB_TIMEOUT_SECONDS // 60}-minute time limit."
     except Exception as error:  # Keep the failure visible through the polling API.
+        with jobs_lock:
+            job.status = "failed"
+            job.completed_at = datetime.now(timezone.utc).isoformat()
+            job.error = str(error)[:3000]
+    finally:
+        with jobs_lock:
+            if active_job_id == job.job_id:
+                active_job_id = None
+
+
+def refresh_cached_job_style(job: TerrainJob) -> None:
+    """Restyle a cached project without downloading or rebuilding its rasters."""
+    global active_job_id
+    with jobs_lock:
+        job.status = "running"
+        job.started_at = datetime.now(timezone.utc).isoformat()
+
+    try:
+        if not STYLE_REFRESH_SCRIPT_PATH.is_file():
+            raise RuntimeError("regional terrain style refresh script is unavailable")
+        if job.result is None:
+            raise RuntimeError("cached terrain result is missing")
+        coverage = job.result["coverage"]
+        style = regional_elevation_style(
+            coverage["elevation_min_m"], coverage["elevation_max_m"]
+        )
+        command = [
+            "/usr/bin/python3",
+            str(STYLE_REFRESH_SCRIPT_PATH),
+            "--project-path",
+            str(job.result["storage"]["project_file"]),
+            "--minimum-m",
+            str(coverage["elevation_min_m"]),
+            "--maximum-m",
+            str(coverage["elevation_max_m"]),
+        ]
+        environment = os.environ.copy()
+        environment.update({"QGIS_PREFIX_PATH": "/usr", "QT_QPA_PLATFORM": "offscreen", "PYTHONUNBUFFERED": "1"})
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=environment,
+            timeout=STYLE_REFRESH_TIMEOUT_SECONDS,
+        )
+        if completed.returncode != 0:
+            diagnostic = (completed.stderr or completed.stdout or "Regional style refresh failed.").strip()
+            raise RuntimeError(diagnostic[-3000:])
+        style_line = next(
+            (line.removeprefix("RESULT_STYLE_JSON=") for line in reversed(completed.stdout.splitlines()) if line.startswith("RESULT_STYLE_JSON=")),
+            None,
+        )
+        if not style_line:
+            raise RuntimeError("Regional style refresh finished without style metadata.")
+        style = json.loads(style_line)
+        if style.get("version") != REGIONAL_ELEVATION_STYLE_VERSION:
+            raise RuntimeError("Regional style refresh returned an unsupported style version.")
+
+        with jobs_lock:
+            coverage["elevation_style"] = style
+            job.result.setdefault("preparation", {})["style_refreshed"] = True
+            job.status = "completed"
+            job.reused = True
+            job.completed_at = datetime.now(timezone.utc).isoformat()
+            write_persisted_job(job)
+    except subprocess.TimeoutExpired:
+        with jobs_lock:
+            job.status = "failed"
+            job.completed_at = datetime.now(timezone.utc).isoformat()
+            job.error = "The cached terrain project took too long to update its style."
+    except Exception as error:
         with jobs_lock:
             job.status = "failed"
             job.completed_at = datetime.now(timezone.utc).isoformat()
@@ -316,7 +420,28 @@ def create_terrain_job(request: TerrainPreparationRequest) -> JSONResponse:
         persisted = load_persisted_job(job_id)
         if persisted is not None:
             jobs[job_id] = persisted
-            return JSONResponse(status_code=status.HTTP_200_OK, content=job_response(persisted))
+            style = persisted.result["coverage"].get("elevation_style") if persisted.result else None
+            if isinstance(style, dict) and style.get("version") == REGIONAL_ELEVATION_STYLE_VERSION:
+                return JSONResponse(status_code=status.HTTP_200_OK, content=job_response(persisted))
+            if active_job_id is not None:
+                del jobs[job_id]
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"message": "Only one terrain preparation can run at a time.", "active_job_id": active_job_id},
+                )
+            if not STYLE_REFRESH_SCRIPT_PATH.is_file():
+                del jobs[job_id]
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="regional terrain style refresh script is unavailable",
+                )
+            persisted.status = "queued"
+            persisted.started_at = None
+            persisted.completed_at = None
+            persisted.error = None
+            active_job_id = job_id
+            executor.submit(refresh_cached_job_style, persisted)
+            return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=job_response(persisted))
 
         if active_job_id is not None:
             raise HTTPException(

@@ -42,8 +42,8 @@ export const DEFAULT_TOPOGRAPHIC_VISIBILITY: TopographicVisibility = {
 };
 
 export const DEFAULT_TOPOGRAPHIC_OPACITY: TopographicOpacity = {
-  hillshade: 15,
-  elevation: 10,
+  hillshade: 25,
+  elevation: 65,
 };
 
 export type TerrainRenderMode = "global" | "detailed" | "hidden";

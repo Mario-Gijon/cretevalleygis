@@ -5,6 +5,20 @@ export type TerrainPreparationResult = {
     resolution_m: number;
     elevation_min_m: number;
     elevation_max_m: number;
+    elevation_style: {
+      version: string;
+      interpolation: "linear-rgb";
+      unit: "m";
+      data_min_m: number;
+      data_max_m: number;
+      min_m: number;
+      max_m: number;
+      stops: Array<{
+        position: number;
+        value_m: number;
+        color: string;
+      }>;
+    };
     horizontal_crs: string;
     vertical_datum: string;
     nodata: number;
@@ -28,6 +42,7 @@ export type TerrainPreparationResult = {
     source_tile_count: number;
     source_downloaded_bytes: number;
     reused: boolean;
+    style_refreshed?: boolean;
   };
 };
 

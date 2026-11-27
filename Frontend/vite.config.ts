@@ -8,6 +8,7 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  cacheDir: process.env.VITE_CACHE_DIR ?? path.resolve(projectRoot, ".vite"),
   resolve: {
     alias: {
       "@": path.resolve(projectRoot, "src"),

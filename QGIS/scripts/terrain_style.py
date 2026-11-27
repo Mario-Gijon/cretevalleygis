@@ -11,6 +11,7 @@ from qgis.core import (
     QgsSingleBandPseudoColorRenderer,
 )
 from qgis.PyQt.QtGui import QColor
+from terrain_style_config import regional_elevation_style
 
 
 # Keep the same absolute value-to-colour mapping at both resolutions.
@@ -41,18 +42,42 @@ def set_visual_resampling(layer: QgsRasterLayer) -> None:
     layer.setResamplingStage(Qgis.RasterResamplingStage.ResampleFilter)
 
 
-def style_elevation(layer: QgsRasterLayer) -> None:
+def style_elevation(
+    layer: QgsRasterLayer,
+    minimum_m: float | None = None,
+    maximum_m: float | None = None,
+) -> dict | None:
+    """Use the fixed world ramp by default, or an adaptive regional ramp."""
+    regional_style = None
+    if minimum_m is None or maximum_m is None:
+        display_minimum = ELEVATION_STYLE_MIN
+        display_maximum = ELEVATION_STYLE_MAX
+        stops = [
+            {"value_m": value, "color": color}
+            for value, color in ELEVATION_COLOR_STOPS
+        ]
+    else:
+        regional_style = regional_elevation_style(minimum_m, maximum_m)
+        display_minimum = regional_style["min_m"]
+        display_maximum = regional_style["max_m"]
+        stops = regional_style["stops"]
+
     items = [
-        QgsColorRampShader.ColorRampItem(value, QColor(color), f"{value:g} m")
-        for value, color in ELEVATION_COLOR_STOPS
+        QgsColorRampShader.ColorRampItem(
+            stop["value_m"],
+            QColor(stop["color"]),
+            f"{stop['value_m']:g} m",
+        )
+        for stop in stops
     ]
-    color_shader = QgsColorRampShader(ELEVATION_STYLE_MIN, ELEVATION_STYLE_MAX)
+    color_shader = QgsColorRampShader(display_minimum, display_maximum)
     color_shader.setColorRampType(QgsColorRampShader.Interpolated)
     color_shader.setColorRampItemList(items)
-    raster_shader = QgsRasterShader(ELEVATION_STYLE_MIN, ELEVATION_STYLE_MAX)
+    raster_shader = QgsRasterShader(display_minimum, display_maximum)
     raster_shader.setRasterShaderFunction(color_shader)
     layer.setRenderer(QgsSingleBandPseudoColorRenderer(layer.dataProvider(), 1, raster_shader))
     set_visual_resampling(layer)
+    return regional_style
 
 
 def style_hillshade(layer: QgsRasterLayer) -> None:

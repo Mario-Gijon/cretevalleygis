@@ -73,7 +73,7 @@ const featureStyle = new Style({
 });
 
 const terrainFeatureStyle = new Style({
-  fill: new Fill({ color: "rgba(69, 197, 197, 0.035)" }),
+  fill: new Fill({ color: "rgba(69, 197, 197, 0.015)" }),
   stroke: new Stroke({ color: "#134F8A", width: 3 }),
 });
 
@@ -88,7 +88,7 @@ const selectedStyle = new Style({
 });
 
 const selectedTerrainStyle = new Style({
-  fill: new Fill({ color: "rgba(69, 197, 197, 0.045)" }),
+  fill: new Fill({ color: "rgba(69, 197, 197, 0.025)" }),
   stroke: new Stroke({ color: "#05294C", width: 4 }),
 });
 

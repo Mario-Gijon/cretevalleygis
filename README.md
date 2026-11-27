@@ -16,6 +16,8 @@ Abre el frontend propio en <http://localhost:5177>. QGIS Server se publica local
 
 La demo QWC2 permanece disponible en <http://localhost:5176/?t=qwc_demo>. Si solo quieres iniciar el frontend propio y QGIS Server, usa `docker compose up --build -d frontend qgis-server`. Vite conserva hot reload. Para ver los registros de este hito: `docker compose logs -f frontend qgis-server qgis-world-data`. Para detener el entorno: `docker compose down`.
 
+El contenedor Vite ejecuta con el UID/GID del host para que los archivos de `Frontend/dist` sigan siendo editables. El valor predeterminado es `1000:1000`; si tu usuario usa otros identificadores, define `HOST_UID` y `HOST_GID` en `.env` antes de arrancar Compose.
+
 ## Mapa mundial propio
 
 El servicio ejecuta QGIS Server `3.44.16` desde la imagen oficial de QGIS, fijada por versión y digest, con límites de 1 CPU y 1 GiB de memoria. El servicio auxiliar `qgis-world-data` prepara únicamente los 18 conjuntos necesarios de Natural Earth: tierra, países, límites, localidades, ríos y lagos para 1:110m, 1:50m y 1:10m. Cada archivo comprimido se valida con SHA-256 antes de extraerse a un volumen Docker; no se versionan los datasets ni el proyecto generado.
@@ -35,7 +37,7 @@ El origen, las descargas seleccionadas, sus huellas SHA-256, estilos y procedimi
 
 La topografía usa una tesela del **Copernicus DEM GLO-30 Public**, un modelo digital de superficie de 30 m. El producto público está disponible sin cuenta AWS en el bucket `copernicus-dem-30m`, con cobertura incompleta en algunos países. Se almacena el COG original en `terrain/source/tiles` y los GeoTIFF derivados en `terrain/derived` del volumen Docker persistente `qgis_world_data`; ningún ráster se versiona en Git. El recorte de prueba cubre el macizo del Ida en Creta, caja WGS84 `24.60,35.10,24.96,35.35`. Se descargó una tesela de 1° × 1° (14.584.365 bytes); los dos derivados ocupan aproximadamente 4,67 MB.
 
-El script `QGIS/scripts/prepare-terrain.py` es reutilizable: recibe `--bbox oeste,sur,este,norte` y `--name`, o las variables `TERRAIN_BBOX` y `TERRAIN_AREA_NAME`. Limita cada preparación a 2° × 2° y un máximo de cuatro teselas. Conserva originales, registra ETag y SHA-256, reusa archivos válidos, recorta/reproyecta a un CRS métrico local, genera hillshade con GDAL y actualiza el proyecto QGIS de forma separada a los vectores. El ráster de elevación mantiene metros, datum vertical EGM2008 y NoData `-9999`. Como el COG público no declara NoData, se enmascaran las zonas de mar con Natural Earth 1:10m; los píxeles sin datos son transparentes y no representan 0 m. El producto es un DSM, por lo que vegetación y edificios pueden influir en la cota.
+El script `QGIS/scripts/prepare-terrain.py` es reutilizable: recibe `--bbox oeste,sur,este,norte` y `--name`, o las variables `TERRAIN_BBOX` y `TERRAIN_AREA_NAME`. Limita cada preparación a 4° por lado, 16 teselas y 30 millones de píxeles proyectados a 30 m; comprueba los tres límites antes de descargar. Los límites se pueden ajustar con `TERRAIN_MAX_SPAN_DEGREES`, `TERRAIN_MAX_TILES` y `TERRAIN_MAX_RASTER_PIXELS`. El trabajo tiene un límite predeterminado de 30 minutos (`TERRAIN_JOB_TIMEOUT_SECONDS`); al expirar o fallar libera el único espacio de trabajo activo. Conserva originales, registra ETag y SHA-256, reusa archivos válidos, recorta/reproyecta a un CRS métrico local, genera hillshade con GDAL y actualiza el proyecto QGIS de forma separada a los vectores. El ráster de elevación mantiene metros, datum vertical EGM2008 y NoData `-9999`. Como el COG público no declara NoData, se enmascaran las zonas de mar con Natural Earth 1:10m; los píxeles sin datos son transparentes y no representan 0 m. El producto es un DSM, por lo que vegetación y edificios pueden influir en la cota.
 
 Para preparar otra zona, copia `.env.example` a `.env`, cambia el nombre y la caja, y ejecuta:
 
@@ -44,7 +46,7 @@ docker compose run --rm --no-deps qgis-world-data
 docker compose restart qgis-server
 ```
 
-La etapa de elevación reutiliza la tesela y los derivados si sus checksums y metadatos siguen válidos. Un fallo en la descarga o procesamiento topográfico no impide que se sirvan Natural Earth y el frontend. En el visor, las dos capas aparecen apagadas por defecto y tienen controles de opacidad. La leyenda usa una escala común de altitudes y profundidades.
+La etapa de elevación reutiliza la tesela y los derivados si sus checksums y metadatos siguen válidos. Un fallo en la descarga o procesamiento topográfico no impide que se sirvan Natural Earth y el frontend. En el visor, las dos capas aparecen apagadas por defecto y tienen controles de opacidad. ETOPO conserva la escala absoluta mundial; cada terreno Copernicus usa una escala adaptativa regional con paleta interpolada y leyenda recibida del backend. Las escalas regionales no son comparables directamente entre zonas. Los valores NoData permanecen transparentes.
 
 ### Copernicus DEM: licencia y atribución
 
@@ -101,7 +103,7 @@ Endpoints:
 - `GET /api/terrain/jobs/{job_id}`: estado `queued`, `running`, `completed` o `failed`.
 - `GET /api/terrain/jobs/{job_id}/result`: cobertura WGS84, resolución, rango de elevación, archivos y referencias WMS (`terrain_hillshade` y `terrain_elevation`) con el parámetro `MAP` del proyecto regional.
 
-Las peticiones comparten la validación del script: extensión WGS84 creciente, máximo 2° por lado y no más de cuatro teselas Copernicus. Solo se ejecuta un trabajo a la vez; otra región mientras haya un trabajo activo recibe `409`. Una solicitud equivalente devuelve el resultado guardado con `reused: true`; la preparación también reutiliza teselas y rásteres verificados.
+Las peticiones comparten la validación del script: extensión WGS84 creciente, máximo 4° por lado, no más de 16 teselas y 30 millones de píxeles proyectados a 30 m. El límite de trabajo predeterminado es de 30 minutos. Solo se ejecuta un trabajo a la vez; otra región mientras haya un trabajo activo recibe `409`. Una solicitud equivalente devuelve el resultado guardado con `reused: true`; la preparación también reutiliza teselas y rásteres verificados. Si un resultado guardado tiene un proyecto anterior a la escala adaptativa, FastAPI actualiza solo el estilo del proyecto QGIS: no vuelve a descargar teselas ni a generar rásteres.
 
 Arranque y parada del backend:
 

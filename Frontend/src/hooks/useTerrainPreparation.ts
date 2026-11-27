@@ -17,8 +17,21 @@ function apiErrorMessage(status: number, body: ApiErrorBody): string {
   const normalized = detail.toLowerCase();
 
   if (status === 409) return "Hay otra preparación en curso. Espera a que termine y vuelve a intentarlo.";
-  if (status === 422 && /2°|safety limit|selects \d+ tiles|four tiles/.test(normalized)) {
-    return "La extensión es demasiado grande. Reduce el área a un máximo de 2° por lado y cuatro teselas.";
+  if (status === 422 && normalized.includes("extent exceeds")) {
+    const maximum = detail.match(/maximum of ([\d.]+)° per side/i)?.[1] ?? "4";
+    return `El área supera la extensión máxima de ${maximum}° por lado. Reduce el polígono y vuelve a intentarlo.`;
+  }
+  if (status === 422 && normalized.includes("copernicus tiles; limit is")) {
+    const match = detail.match(/intersects (\d+) copernicus tiles; limit is (\d+)/i);
+    return match
+      ? `El área necesita ${match[1]} teselas de terreno y el límite es ${match[2]}. Reduce el polígono y vuelve a intentarlo.`
+      : "El área supera el límite de teselas de terreno. Reduce el polígono y vuelve a intentarlo.";
+  }
+  if (status === 422 && normalized.includes("million pixels; limit is")) {
+    const match = detail.match(/would contain ([\d.]+) million pixels; limit is ([\d.]+) million/i);
+    return match
+      ? `El ráster ocuparía ${match[1]} millones de píxeles y el límite es ${match[2]} millones. Reduce el área y vuelve a intentarlo.`
+      : "El ráster supera el límite de tamaño. Reduce el área y vuelve a intentarlo.";
   }
   if (status === 422) return "La extensión no es válida. Dibuja un polígono dentro del mapa y vuelve a intentarlo.";
   if (status === 503) return "El servicio de preparación no está disponible ahora mismo. El mapa base sigue funcionando.";
@@ -27,10 +40,13 @@ function apiErrorMessage(status: number, body: ApiErrorBody): string {
 
 function preparationFailureMessage(detail: string): string {
   const normalized = detail.toLowerCase();
+  if (/time limit|exceeded the \d+-minute|timeout|timed out/.test(normalized)) {
+    return "La preparación superó el tiempo límite. El servicio ya está libre; puedes reducir el área e intentarlo de nuevo.";
+  }
   if (/http error (403|404)|nosuchkey|not found|no such key/.test(normalized)) {
     return "No hay datos Copernicus disponibles para esta extensión.";
   }
-  if (/timeout|timed out|temporary failure|urlopen error/.test(normalized)) {
+  if (/temporary failure|urlopen error/.test(normalized)) {
     return "No se pudo acceder a los datos del terreno. Inténtalo más tarde.";
   }
   return "No se pudo preparar el terreno para esta extensión. El mapa base sigue disponible.";

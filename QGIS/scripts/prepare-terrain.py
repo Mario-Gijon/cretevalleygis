@@ -29,7 +29,7 @@ from qgis.core import (
 )
 from terrain_style import style_elevation as apply_shared_elevation_style
 from terrain_style import style_hillshade as apply_shared_hillshade_style
-from terrain_request import parse_bbox_text, selected_tiles
+from terrain_request import local_metric_crs, parse_bbox_text, selected_tiles
 
 
 DATA_ROOT = Path("/io/data/terrain")
@@ -194,18 +194,6 @@ def download_or_reuse_tile(stem: str, manifest: dict) -> tuple[Path, dict, int]:
 def area_slug(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", name.casefold()).strip("-")
     return slug[:48] or "terrain-area"
-
-
-def local_metric_crs(bbox: tuple[float, float, float, float]) -> str:
-    west, south, east, north = bbox
-    longitude = (west + east) / 2
-    latitude = (south + north) / 2
-    if latitude >= 84:
-        return "EPSG:3413"
-    if latitude <= -80:
-        return "EPSG:3031"
-    zone = max(1, min(60, int((longitude + 180) // 6) + 1))
-    return f"EPSG:{32600 + zone if latitude >= 0 else 32700 + zone}"
 
 
 def write_cutline(bbox: tuple[float, float, float, float], path: Path) -> None:
@@ -462,8 +450,11 @@ def build_derived(
         raise
 
 
-def set_elevation_renderer(layer: QgsRasterLayer, minimum: float, maximum: float) -> None:
-    apply_shared_elevation_style(layer)
+def set_elevation_renderer(layer: QgsRasterLayer, minimum: float, maximum: float) -> dict:
+    style = apply_shared_elevation_style(layer, minimum, maximum)
+    if style is None:
+        raise RuntimeError("QGIS did not create the adaptive regional elevation scale")
+    return style
 
 
 def style_hillshade(layer: QgsRasterLayer) -> None:
@@ -488,7 +479,7 @@ def set_raster_metadata(layer: QgsRasterLayer, title: str, abstract: str) -> Non
     )
 
 
-def add_terrain_to_project(elevation_path: Path, hillshade_path: Path, record: dict) -> None:
+def add_terrain_to_project(elevation_path: Path, hillshade_path: Path, record: dict) -> dict:
     project = QgsProject.instance()
     PROJECT_PATH.parent.mkdir(parents=True, exist_ok=True)
     if PROJECT_PATH.exists():
@@ -518,7 +509,17 @@ def add_terrain_to_project(elevation_path: Path, hillshade_path: Path, record: d
     hillshade = QgsRasterLayer(str(hillshade_path), "terrain_hillshade", "gdal")
     if not elevation.isValid() or not hillshade.isValid():
         raise RuntimeError("QGIS could not load both terrain rasters")
-    set_elevation_renderer(elevation, min_m, max_m)
+    elevation_style = set_elevation_renderer(elevation, min_m, max_m)
+    style_stops_text = ", ".join(
+        f"{stop['value_m']:.1f} m {stop['color']}" for stop in elevation_style["stops"]
+    )
+    style_abstract = (
+        f"Adaptive regional elevation scale {elevation_style['min_m']:.1f}–"
+        f"{elevation_style['max_m']:.1f} m; interpolation: linear RGB; "
+        f"renderer stops: {style_stops_text}. "
+        "Colours are scaled to this region and should not be compared directly between regions."
+    )
+    shared_abstract = f"{shared_abstract} {style_abstract}"
     style_hillshade(hillshade)
     set_raster_metadata(elevation, f"Elevación del terreno — {area_name}", f"{PRODUCT}, 30 m; elevation units: metres. {shared_abstract}")
     set_raster_metadata(hillshade, f"Relieve sombreado — {area_name}", f"Hillshade derived with GDAL from {PRODUCT}, 30 m. {shared_abstract}")
@@ -530,6 +531,7 @@ def add_terrain_to_project(elevation_path: Path, hillshade_path: Path, record: d
     if not project.write():
         raise RuntimeError(f"Could not write the QGIS project with terrain layers: {temp_project}")
     os.replace(temp_project, PROJECT_PATH)
+    return elevation_style
 
 
 def make_terrain_readable(paths: tuple[Path, ...]) -> None:
@@ -575,7 +577,7 @@ def main() -> None:
     app = QgsApplication([], False)
     app.initQgis()
     try:
-        add_terrain_to_project(elevation_path, hillshade_path, record)
+        elevation_style = add_terrain_to_project(elevation_path, hillshade_path, record)
     finally:
         app.exitQgis()
 
@@ -592,6 +594,7 @@ def main() -> None:
         "bbox_wgs84": list(bbox),
         "elevation_min_m": record["elevation_min_m"],
         "elevation_max_m": record["elevation_max_m"],
+        "elevation_style": elevation_style,
         "crs": record["crs"],
         "vertical_datum": record.get("vertical_datum", "EGM2008"),
         "resolution_m": 30,

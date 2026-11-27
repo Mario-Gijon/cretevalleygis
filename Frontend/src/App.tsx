@@ -248,6 +248,13 @@ export default function App() {
     : null;
   const activeTerrainGeometry = activeTerrainFeature?.getGeometry();
   const activeTerrainClipGeometry = activeTerrainGeometry instanceof Polygon ? activeTerrainGeometry : null;
+  const regionalElevationStyle = activePreparedTerrain?.result.coverage.elevation_style;
+  const regionalElevationGradient = regionalElevationStyle
+    ? `linear-gradient(90deg, ${regionalElevationStyle.stops.map((stop) => (
+      `${stop.color} ${(stop.position * 100).toFixed(2)}%`
+    )).join(", ")})`
+    : undefined;
+  const formatElevation = (value: number) => Math.round(value).toLocaleString("es-ES");
 
   useEffect(() => {
     if (!activePreparedTerrain) return;
@@ -636,15 +643,25 @@ export default function App() {
             ) && (
               <div className="elevation-legend" aria-label="Leyenda de elevación en metros">
                 <span className="elevation-legend-title">
-                  {activePreparedTerrain ? "Elevación · escala fija (m)" : "Elevación · altura y profundidad (m)"}
+                  {activePreparedTerrain ? "Elevación · escala adaptativa regional (m)" : "Elevación · altura y profundidad (m)"}
                 </span>
-                <div className="elevation-legend-gradient" aria-hidden="true" />
+                <div
+                  className="elevation-legend-gradient"
+                  style={regionalElevationGradient ? { background: regionalElevationGradient } : undefined}
+                  aria-label={regionalElevationStyle
+                    ? `Interpolación lineal RGB: ${regionalElevationStyle.stops.map((stop) => `${formatElevation(stop.value_m)} m ${stop.color}`).join(", ")}`
+                    : undefined}
+                  title={regionalElevationStyle
+                    ? `Escala ${formatElevation(regionalElevationStyle.min_m)}–${formatElevation(regionalElevationStyle.max_m)} m`
+                    : undefined}
+                  aria-hidden={!regionalElevationStyle}
+                />
                 <div className="elevation-legend-values">
-                  {activePreparedTerrain ? (
+                  {regionalElevationStyle ? (
                     <>
-                      <span>−11.000 m</span>
-                      <span>0 m</span>
-                      <span>9.000 m</span>
+                      <span>{formatElevation(regionalElevationStyle.min_m)} m</span>
+                      <span>{formatElevation((regionalElevationStyle.min_m + regionalElevationStyle.max_m) / 2)} m</span>
+                      <span>{formatElevation(regionalElevationStyle.max_m)} m</span>
                     </>
                   ) : (
                     <>
@@ -654,11 +671,16 @@ export default function App() {
                     </>
                   )}
                 </div>
+                {regionalElevationStyle && (
+                  <span className="elevation-legend-data-range">
+                    Datos válidos: {formatElevation(regionalElevationStyle.data_min_m)}–{formatElevation(regionalElevationStyle.data_max_m)} m
+                  </span>
+                )}
               </div>
             )}
             {activePreparedTerrain ? (
               <p className="terrain-coverage-note" role="status">
-                Mostrando el proyecto regional. Puedes activar por separado elevación y relieve sombreado.
+                Escala ajustada a esta región; los colores no son comparables entre zonas. Elevación y sombreado se controlan por separado.
               </p>
             ) : terrainServiceState === "loading" && (
               <p className="terrain-coverage-note" role="status">Comprobando los datos topográficos preparados…</p>

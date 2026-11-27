@@ -134,7 +134,7 @@ export function GeometryDetails({
             </>
           ) : (
             <>
-              <p className="terrain-preparation-help">Usa el rectángulo que contiene el polígono · hasta 2° por lado y 4 teselas.</p>
+              <p className="terrain-preparation-help">Usa el rectángulo que contiene el polígono · hasta 4° por lado, 16 teselas y 30 millones de píxeles a 30 m.</p>
               <Button
                 variant="primary"
                 size="small"
