@@ -17,11 +17,14 @@ export const EXPLORATION_TERRAIN = {
   sunElevationDegrees: 45,
   sunAzimuthDegrees: 315,
   defaultHillshadeEnabled: true,
-  defaultElevationEnabled: true,
   defaultElevationMode: "absolute" as const,
   hillshadeStorageKey: "cv-gis-exploration-relief",
   elevationStorageKey: "cv-gis-exploration-elevation",
   elevationModeStorageKey: "cv-gis-exploration-elevation-mode",
+  themeStorageKey: "cv-gis-exploration-theme",
+  derivativeMinimumZoom: 8,
+  flatAspectThresholdPercent: 0.1,
+  aspectSectorHalfWidthDegrees: 22.5,
 } as const;
 
 export const ABSOLUTE_ELEVATION_MIN_M = -11_000;
@@ -62,6 +65,60 @@ export const ADAPTIVE_LAND_STOPS = [
 ] as const;
 
 export type ExplorationElevationMode = "adaptive" | "absolute";
+export type ExplorationTerrainTheme = "none" | "elevation" | "slope" | "aspect";
+
+export const SLOPE_CLASSES = [
+  { maximumPercent: 5, color: "#4f9f83", label: "0–5 %" },
+  { maximumPercent: 15, color: "#a8c96f", label: ">5–15 %" },
+  { maximumPercent: 30, color: "#f0df73", label: ">15–30 %" },
+  { maximumPercent: 60, color: "#ed9c58", label: ">30–60 %" },
+  { maximumPercent: Number.POSITIVE_INFINITY, color: "#c84a43", label: ">60 %" },
+] as const;
+
+export const ASPECT_CLASSES = [
+  { direction: "N", color: "#f2d34f", label: "Norte" },
+  { direction: "NE", color: "#9bc85b", label: "Noreste" },
+  { direction: "E", color: "#48a88e", label: "Este" },
+  { direction: "SE", color: "#4b9dc5", label: "Sureste" },
+  { direction: "S", color: "#526dba", label: "Sur" },
+  { direction: "SO", color: "#8567b8", label: "Suroeste" },
+  { direction: "O", color: "#c06b9b", label: "Oeste" },
+  { direction: "NO", color: "#e18759", label: "Noroeste" },
+] as const;
+
+export const ASPECT_FLAT_COLOR = "#c9c9c4";
+
+/** Ground distance represented by one Terrarium source pixel in Web Mercator. */
+export function terrainPixelGroundDistanceMeters(
+  sourcePixelResolution: number,
+  latitudeDegrees: number,
+): number {
+  return Math.max(0.1, sourcePixelResolution * Math.max(0.05, Math.cos((latitudeDegrees * Math.PI) / 180)));
+}
+
+export function effectiveTerrainSourceZoom(selectedTileZoom: number, maximumDataZoom: number): number {
+  return Math.max(0, Math.min(maximumDataZoom, Math.floor(selectedTileZoom)));
+}
+
+/** Central-difference slope and downslope azimuth for four neighboring samples. */
+export function terrainDerivatives(
+  westMeters: number,
+  eastMeters: number,
+  northMeters: number,
+  southMeters: number,
+  pixelGroundDistanceMeters: number,
+): { slopePercent: number; aspectDegrees: number | null } {
+  const distance = Math.max(0.1, pixelGroundDistanceMeters);
+  const dzdx = (eastMeters - westMeters) / (2 * distance);
+  // Terrarium tile rows increase southward, so the south sample is +Y.
+  const dzdy = (southMeters - northMeters) / (2 * distance);
+  const slopePercent = Math.hypot(dzdx, dzdy) * 100;
+  if (slopePercent <= EXPLORATION_TERRAIN.flatAspectThresholdPercent) {
+    return { slopePercent, aspectDegrees: null };
+  }
+  const azimuth = (Math.atan2(-dzdx, dzdy) * 180) / Math.PI;
+  return { slopePercent, aspectDegrees: (azimuth + 360) % 360 };
+}
 export type ExplorationTerrainStatus =
   | "disabled"
   | "scale"
@@ -136,13 +193,6 @@ export function initialExplorationHillshadeEnabled(): boolean {
   );
 }
 
-export function initialExplorationElevationEnabled(): boolean {
-  return readBooleanPreference(
-    EXPLORATION_TERRAIN.elevationStorageKey,
-    EXPLORATION_TERRAIN.defaultElevationEnabled,
-  );
-}
-
 export function initialExplorationElevationMode(): ExplorationElevationMode {
   try {
     const storedMode = window.localStorage.getItem(EXPLORATION_TERRAIN.elevationModeStorageKey);
@@ -151,6 +201,20 @@ export function initialExplorationElevationMode(): ExplorationElevationMode {
       : EXPLORATION_TERRAIN.defaultElevationMode;
   } catch {
     return EXPLORATION_TERRAIN.defaultElevationMode;
+  }
+}
+
+export function initialExplorationTerrainTheme(): ExplorationTerrainTheme {
+  try {
+    const storedTheme = window.localStorage.getItem(EXPLORATION_TERRAIN.themeStorageKey);
+    if (storedTheme === "none" || storedTheme === "elevation" || storedTheme === "slope" || storedTheme === "aspect") {
+      return storedTheme;
+    }
+    // Preserve the elevation preference from earlier versions of the viewer.
+    const legacyElevation = window.localStorage.getItem(EXPLORATION_TERRAIN.elevationStorageKey);
+    return legacyElevation === null || legacyElevation === "true" ? "elevation" : "none";
+  } catch {
+    return "elevation";
   }
 }
 

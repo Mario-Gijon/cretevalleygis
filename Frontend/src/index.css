@@ -989,6 +989,25 @@ button {
   font: inherit;
 }
 
+.exploration-theme-select {
+  display: grid;
+  gap: 5px;
+  margin: 4px 2px 7px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.exploration-theme-select select {
+  width: 100%;
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
 .exploration-elevation-legend {
   display: grid;
   gap: 6px;
@@ -1049,6 +1068,57 @@ button {
 
 .exploration-elevation-legend__fallback {
   color: #8a5a13;
+}
+
+.terrain-theme-legend,
+.terrain-aspect-legend {
+  display: grid;
+  gap: 6px;
+  margin: 9px 2px 0;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.terrain-theme-legend__row {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-height: 16px;
+}
+
+.terrain-theme-legend__row i,
+.terrain-aspect-flat i {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1px solid rgb(5 41 76 / 15%);
+  border-radius: 3px;
+}
+
+.terrain-aspect-compass {
+  display: grid;
+  width: 74px;
+  height: 74px;
+  grid-template: repeat(3, 1fr) / repeat(3, 1fr);
+  gap: 3px;
+  margin: 2px auto;
+}
+
+.terrain-aspect-compass span {
+  display: grid;
+  place-items: center;
+  border: 1px solid rgb(5 41 76 / 15%);
+  border-radius: 5px;
+  color: #142b38;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.terrain-aspect-flat {
+  display: flex;
+  align-items: center;
+  gap: 7px;
 }
 
 .app-shell[data-theme="dark"] .exploration-elevation-legend__fallback {

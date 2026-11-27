@@ -39,11 +39,17 @@ import {
   ABSOLUTE_ELEVATION_STOPS,
   ADAPTIVE_LAND_STOPS,
   EXPLORATION_TERRAIN,
+  ASPECT_CLASSES,
+  ASPECT_FLAT_COLOR,
+  SLOPE_CLASSES,
   OCEAN_ELEVATION_STOPS,
   absoluteElevationScale,
   adaptiveElevationScale,
+  effectiveTerrainSourceZoom,
+  terrainPixelGroundDistanceMeters,
   type ExplorationElevationMode,
   type ExplorationElevationScale,
+  type ExplorationTerrainTheme,
   type ExplorationTerrainStatus,
 } from "@/lib/exploration-terrain";
 
@@ -104,6 +110,12 @@ function createShadedReliefStyle() {
   const z0y = ["*", ["var", "verticalExaggeration"], elevation(0, -1)];
   const z1y = ["*", ["var", "verticalExaggeration"], elevation(0, 1)];
   const dzdy = ["/", ["-", z1y, z0y], pixelDistance];
+  // These derivatives use source-pixel ground distance and unexaggerated elevations.
+  const terrainDzdx = ["/", ["-", elevation(1, 0), elevation(-1, 0)], pixelDistance];
+  const terrainDzdy = ["/", ["-", elevation(0, 1), elevation(0, -1)], pixelDistance];
+  const terrainSlopePercent = ["*", 100, ["sqrt", ["+", ["^", terrainDzdx, 2], ["^", terrainDzdy, 2]]]];
+  // atan(y, x) is atan2. Signed degrees use 0° at north and increase clockwise.
+  const terrainAspectDegrees = ["*", ["atan", ["-", 0, terrainDzdx], terrainDzdy], 180 / Math.PI];
   const slope = ["atan", ["sqrt", ["+", ["^", dzdx, 2], ["^", dzdy, 2]]]];
   const aspect = ["clamp", ["atan", ["-", 0, dzdx], dzdy], -Math.PI, Math.PI];
   const sunElevation = ["*", Math.PI / 180, ["var", "sunElevation"]];
@@ -148,16 +160,72 @@ function createShadedReliefStyle() {
     landColor[channel],
     oceanColor[channel],
   ]);
+  const channelValue = (color: string, channel: number) => colorChannel(color, channel);
+  const slopeColor = [0, 1, 2].map((channel) => {
+    let result: unknown[] | number = channelValue(SLOPE_CLASSES.at(-1)!.color, channel);
+    for (let index = SLOPE_CLASSES.length - 2; index >= 0; index -= 1) {
+      result = ["case", ["<=", terrainSlopePercent, SLOPE_CLASSES[index].maximumPercent], channelValue(SLOPE_CLASSES[index].color, channel), result];
+    }
+    return result;
+  });
+  const aspectColor = [0, 1, 2].map((channel) => {
+    const colorForDirection = (direction: string) => channelValue(ASPECT_CLASSES.find((item) => item.direction === direction)!.color, channel);
+    const north = colorForDirection("N");
+    const northEast = colorForDirection("NE");
+    const east = colorForDirection("E");
+    const southEast = colorForDirection("SE");
+    const south = colorForDirection("S");
+    const southWest = colorForDirection("SO");
+    const west = colorForDirection("O");
+    const northWest = colorForDirection("NO");
+    const flat = channelValue(ASPECT_FLAT_COLOR, channel);
+    const sector = EXPLORATION_TERRAIN.aspectSectorHalfWidthDegrees;
+    const positiveAspect: unknown[] = [
+      "case", ["<=", terrainAspectDegrees, 3 * sector], northEast,
+      ["case", ["<=", terrainAspectDegrees, 5 * sector], east,
+        ["case", ["<=", terrainAspectDegrees, 7 * sector], southEast, south]],
+    ];
+    const negativeAspect: unknown[] = [
+      "case", [">=", terrainAspectDegrees, -3 * sector], northWest,
+      ["case", [">=", terrainAspectDegrees, -5 * sector], west,
+        ["case", [">=", terrainAspectDegrees, -7 * sector], southWest, south]],
+    ];
+    return [
+      "case",
+      ["<=", terrainSlopePercent, EXPLORATION_TERRAIN.flatAspectThresholdPercent], flat,
+      ["case", ["<=", ["abs", terrainAspectDegrees], sector], north,
+        ["case", [">", terrainAspectDegrees, 0], positiveAspect, negativeAspect]],
+    ];
+  });
+  const thematicColor = [0, 1, 2].map((channel) => [
+    "case", [">", ["var", "showElevation"], 0.5], elevationColor[channel],
+    ["case", [">", ["var", "showSlope"], 0.5], slopeColor[channel], aspectColor[channel]],
+  ]);
+  // Terrarium encodes elevation but no water mask. Require positive center and neighbor
+  // elevations for derivatives; this conservatively removes bathymetry and low areas.
+  const validDerivativeNeighbors = [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]] as const;
+  const derivativeValid = validDerivativeNeighbors.reduce<unknown>((valid, [x, y]) => [
+    "case",
+    ["<", ["band", 4, x, y], 16 / 255], 0,
+    ["case", ["<=", elevation(x, y), 0], 0, valid],
+  ], 1);
   const shadeAmount = ["*", ["var", "showHillshade"], ["var", "hillshadeOpacity"]];
-  const elevationAmount = ["*", ["var", "showElevation"], ["var", "elevationOpacity"]];
+  const themeOpacity = ["var", "themeOpacity"];
+  const themeSelected = ["+", ["var", "showElevation"], ["var", "showSlope"], ["var", "showAspect"]];
+  const themeAmount = ["*", ["case", [">", themeSelected, 0.5], 1, 0], themeOpacity];
   const lightFactor = ["clamp", ["+", 0.9, ["*", 0.25, incidence]], 0.72, 1.12];
   const terrainLighting = ["+", 1, ["*", shadeAmount, ["-", lightFactor, 1]]];
-  const shadedElevationColor = elevationColor.map((channel) => ["clamp", ["*", channel, terrainLighting], 0, 255]);
+  const shadedThematicColor = thematicColor.map((channel) => ["clamp", ["*", channel, terrainLighting], 0, 255]);
   const grayHillshade = ["clamp", ["*", 255, incidence], 0, 255];
-  const colorizedTerrain = [">", elevationAmount, 0];
+  const colorizedTerrain = [">", themeAmount, 0];
+  const derivativeThemeValid = ["case", [">", ["var", "showElevation"], 0.5], 1, derivativeValid];
   const tileAlpha = ["band", 4];
-  const outputAlpha = ["*", tileAlpha, ["case", colorizedTerrain, elevationAmount, shadeAmount]];
-  const colorizedOutput = ["color", ...shadedElevationColor, outputAlpha];
+  const outputAlpha = ["*", tileAlpha, ["case", colorizedTerrain,
+    ["case", [">", derivativeThemeValid, 0.5], themeAmount, shadeAmount],
+    shadeAmount,
+  ]];
+  const thematicOutputColor = shadedThematicColor.map((channel) => ["case", [">", derivativeThemeValid, 0.5], channel, grayHillshade]);
+  const colorizedOutput = ["color", ...thematicOutputColor, outputAlpha];
   const shadedOutput = ["color", grayHillshade, outputAlpha];
 
   return {
@@ -165,8 +233,10 @@ function createShadedReliefStyle() {
       groundResolution: 1,
       showHillshade: 1,
       showElevation: 1,
+      showSlope: 0,
+      showAspect: 0,
       hillshadeOpacity: EXPLORATION_TERRAIN.defaultHillshadeOpacity / 100,
-      elevationOpacity: EXPLORATION_TERRAIN.defaultElevationOpacity / 100,
+      themeOpacity: EXPLORATION_TERRAIN.defaultElevationOpacity / 100,
       adaptiveScale: 0,
       adaptiveMin: 0,
       adaptiveMax: EXPLORATION_TERRAIN.minimumDisplayRangeM,
@@ -234,8 +304,8 @@ type MapViewProps = {
   measurementsLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
   explorationTerrainEnabled: boolean;
   explorationTerrainOpacity: number;
-  explorationElevationEnabled: boolean;
-  explorationElevationOpacity: number;
+  explorationTerrainTheme: ExplorationTerrainTheme;
+  explorationThemeOpacity: number;
   explorationElevationMode: ExplorationElevationMode;
   explorationElevationScale: ExplorationElevationScale;
   explorationElevationScaleRefresh: number;
@@ -262,8 +332,8 @@ export default function MapView({
   measurementsLayer,
   explorationTerrainEnabled,
   explorationTerrainOpacity,
-  explorationElevationEnabled,
-  explorationElevationOpacity,
+  explorationTerrainTheme,
+  explorationThemeOpacity,
   explorationElevationMode,
   explorationElevationScale,
   explorationElevationScaleRefresh,
@@ -288,8 +358,8 @@ export default function MapView({
   const explorationHasErrorRef = useRef(false);
   const explorationEnabledRef = useRef(explorationTerrainEnabled);
   const explorationOpacityRef = useRef(explorationTerrainOpacity);
-  const explorationElevationEnabledRef = useRef(explorationElevationEnabled);
-  const explorationElevationOpacityRef = useRef(explorationElevationOpacity);
+  const explorationTerrainThemeRef = useRef(explorationTerrainTheme);
+  const explorationThemeOpacityRef = useRef(explorationThemeOpacity);
   const explorationElevationModeRef = useRef(explorationElevationMode);
   const explorationElevationScaleRef = useRef(explorationElevationScale);
   const explorationScaleChangeRef = useRef(onExplorationElevationScaleChange);
@@ -303,8 +373,8 @@ export default function MapView({
   explorationScaleChangeRef.current = onExplorationElevationScaleChange;
   explorationEnabledRef.current = explorationTerrainEnabled;
   explorationOpacityRef.current = explorationTerrainOpacity;
-  explorationElevationEnabledRef.current = explorationElevationEnabled;
-  explorationElevationOpacityRef.current = explorationElevationOpacity;
+  explorationTerrainThemeRef.current = explorationTerrainTheme;
+  explorationThemeOpacityRef.current = explorationThemeOpacity;
   explorationElevationModeRef.current = explorationElevationMode;
   explorationElevationScaleRef.current = explorationElevationScale;
 
@@ -432,16 +502,24 @@ export default function MapView({
     let elevationScaleTimer: ReturnType<typeof setTimeout> | undefined;
     let adaptiveCalculationPending = false;
     let adaptiveCalculationDeadline = 0;
-    const updateExplorationStyle = (resolution: number, latitude: number) => {
+    const updateExplorationStyle = (resolution: number, latitude: number, zoom: number) => {
       const layer = explorationTerrainRef.current;
       if (!layer) return;
       const scale = explorationElevationScaleRef.current;
+      const tileGrid = explorationSource?.getTileGridForProjection(map.getView().getProjection());
+      const tileZoom = tileGrid?.getZForResolution(resolution) ?? zoom;
+      const sourceZoom = effectiveTerrainSourceZoom(tileZoom, EXPLORATION_TERRAIN.maxDataZoom);
+      const sourceResolution = tileGrid?.getResolution(sourceZoom) ?? resolution;
+      const theme = explorationTerrainThemeRef.current;
+      const derivativesVisible = zoom >= EXPLORATION_TERRAIN.derivativeMinimumZoom;
       layer.updateStyleVariables({
-        groundResolution: Math.max(0.1, resolution * Math.max(0.05, Math.cos((latitude * Math.PI) / 180))),
+        groundResolution: terrainPixelGroundDistanceMeters(sourceResolution, latitude),
         showHillshade: explorationEnabledRef.current ? 1 : 0,
-        showElevation: explorationElevationEnabledRef.current ? 1 : 0,
+        showElevation: theme === "elevation" ? 1 : 0,
+        showSlope: theme === "slope" && derivativesVisible ? 1 : 0,
+        showAspect: theme === "aspect" && derivativesVisible ? 1 : 0,
         hillshadeOpacity: explorationOpacityRef.current / 100,
-        elevationOpacity: explorationElevationOpacityRef.current / 100,
+        themeOpacity: explorationThemeOpacityRef.current / 100,
         adaptiveScale: scale.effectiveMode === "adaptive" ? 1 : 0,
         adaptiveMin: scale.minM,
         adaptiveMax: Math.max(scale.maxM, scale.minM + EXPLORATION_TERRAIN.minimumDisplayRangeM),
@@ -457,7 +535,7 @@ export default function MapView({
       explorationElevationScaleRef.current = scale;
       const center = map.getView().getCenter();
       const latitude = center ? toLonLat(center)[1] : 0;
-      updateExplorationStyle(map.getView().getResolution() ?? 1, latitude);
+      updateExplorationStyle(map.getView().getResolution() ?? 1, latitude, map.getView().getZoom() ?? 0);
       if (typeof explorationScaleChangeRef.current === "function") {
         explorationScaleChangeRef.current(scale);
       }
@@ -556,20 +634,25 @@ export default function MapView({
         : EXPLORATION_TERRAIN.overlayMinZoom;
       const scaleReady = zoom >= minimumZoom;
       const hillshadeEnabled = explorationEnabledRef.current;
-      const elevationEnabled = explorationElevationEnabledRef.current;
+      const theme = explorationTerrainThemeRef.current;
+      const derivativeTheme = theme === "slope" || theme === "aspect";
+      const themeVisibleAtScale = !derivativeTheme || zoom >= EXPLORATION_TERRAIN.derivativeMinimumZoom;
+      const thematicEnabled = theme !== "none" && themeVisibleAtScale;
       const visible = Boolean(
         layer
         && isTopographicBasemap
-        && (hillshadeEnabled || elevationEnabled)
+        && (hillshadeEnabled || thematicEnabled)
         && scaleReady,
       );
       if (layer) {
         layer.setVisible(visible);
-        updateExplorationStyle(resolution, latitude);
+        updateExplorationStyle(resolution, latitude, zoom);
       }
       if (!hasWebGL) explorationStatusRef.current?.("unavailable");
       else if (!isTopographicBasemap) explorationStatusRef.current?.("disabled");
-      else if (!hillshadeEnabled && !elevationEnabled) explorationStatusRef.current?.("disabled");
+      else if (!hillshadeEnabled && theme === "none") explorationStatusRef.current?.("disabled");
+      else if (!hillshadeEnabled && derivativeTheme && !themeVisibleAtScale) explorationStatusRef.current?.("scale");
+      else if (!hillshadeEnabled && !thematicEnabled) explorationStatusRef.current?.("disabled");
       else if (!scaleReady) explorationStatusRef.current?.("scale");
       else if (explorationHasErrorRef.current) explorationStatusRef.current?.("error");
       else if (explorationHasLoadedRef.current) {
@@ -767,7 +850,7 @@ export default function MapView({
       view.getResolution() ?? 1,
     );
     mapRef.current?.render();
-  }, [explorationTerrainEnabled, explorationTerrainOpacity, explorationElevationEnabled, explorationElevationOpacity, explorationElevationMode, mapGeneration]);
+  }, [explorationTerrainEnabled, explorationTerrainOpacity, explorationTerrainTheme, explorationThemeOpacity, explorationElevationMode, mapGeneration]);
 
   useEffect(() => {
     scheduleElevationScaleRef.current?.();

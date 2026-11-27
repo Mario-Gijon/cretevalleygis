@@ -47,11 +47,15 @@ import {
   ADAPTIVE_LAND_STOPS,
   OCEAN_ELEVATION_STOPS,
   absoluteElevationScale,
-  initialExplorationElevationEnabled,
   initialExplorationElevationMode,
   initialExplorationHillshadeEnabled,
+  initialExplorationTerrainTheme,
+  ASPECT_CLASSES,
+  ASPECT_FLAT_COLOR,
+  SLOPE_CLASSES,
   type ExplorationElevationMode,
   type ExplorationElevationScale,
+  type ExplorationTerrainTheme,
   type ExplorationTerrainStatus,
 } from "@/lib/exploration-terrain";
 
@@ -76,7 +80,10 @@ const BASE_MAP_OPTIONS: Array<{ id: BaseMapId; title: string; description: strin
   { id: "topographic", title: "Topográfico", description: "Elevaciones y relieve del terreno" },
 ];
 
-function explorationTerrainStatusMessage(status: ExplorationTerrainStatus, zoom: number): string {
+function explorationTerrainStatusMessage(status: ExplorationTerrainStatus, zoom: number, theme: ExplorationTerrainTheme): string {
+  if ((theme === "slope" || theme === "aspect") && zoom < EXPLORATION_TERRAIN.derivativeMinimumZoom) {
+    return `Acércate al zoom ${EXPLORATION_TERRAIN.derivativeMinimumZoom} para ver ${theme === "slope" ? "las pendientes" : "la orientación"}.`;
+  }
   if (status === "disabled") return "Relieve desactivado.";
   if (status === "scale") return "Acércate para mostrar el relieve.";
   if (status === "loading") return "Cargando relieve…";
@@ -128,10 +135,10 @@ export default function App() {
     lakes: true,
   });
   const [explorationTerrainEnabled, setExplorationTerrainEnabled] = useState(initialExplorationHillshadeEnabled);
-  const [explorationElevationEnabled, setExplorationElevationEnabled] = useState(initialExplorationElevationEnabled);
+  const [explorationTerrainTheme, setExplorationTerrainTheme] = useState<ExplorationTerrainTheme>(initialExplorationTerrainTheme);
   const [explorationElevationMode, setExplorationElevationMode] = useState<ExplorationElevationMode>(initialExplorationElevationMode);
   const [explorationTerrainOpacity, setExplorationTerrainOpacity] = useState<number>(EXPLORATION_TERRAIN.defaultHillshadeOpacity);
-  const [explorationElevationOpacity, setExplorationElevationOpacity] = useState<number>(EXPLORATION_TERRAIN.defaultElevationOpacity);
+  const [explorationThemeOpacity, setExplorationThemeOpacity] = useState<number>(EXPLORATION_TERRAIN.defaultElevationOpacity);
   const [explorationElevationScale, setExplorationElevationScale] = useState<ExplorationElevationScale>(
     () => absoluteElevationScale(initialExplorationElevationMode()),
   );
@@ -218,10 +225,10 @@ export default function App() {
     }
   };
 
-  const changeExplorationElevationEnabled = (enabled: boolean) => {
-    setExplorationElevationEnabled(enabled);
+  const changeExplorationTerrainTheme = (nextTheme: ExplorationTerrainTheme) => {
+    setExplorationTerrainTheme(nextTheme);
     try {
-      window.localStorage.setItem(EXPLORATION_TERRAIN.elevationStorageKey, String(enabled));
+      window.localStorage.setItem(EXPLORATION_TERRAIN.themeStorageKey, nextTheme);
     } catch {
       // Keep this session's preference if browser storage is unavailable.
     }
@@ -259,7 +266,7 @@ export default function App() {
     : baseMap === "osm" || baseMap === "qgis" ? null : baseMap;
   const selectedVectorStatus = selectedVectorBaseMap ? openFreeMapStatus[selectedVectorBaseMap] : "idle";
   const selectedElement = drawingTools.selectedElementInfo;
-  const explorationStatusMessage = explorationTerrainStatusMessage(explorationTerrainStatus, mapZoom);
+  const explorationStatusMessage = explorationTerrainStatusMessage(explorationTerrainStatus, mapZoom, explorationTerrainTheme);
   const formatElevation = (value: number) => Math.round(value).toLocaleString("es-ES");
   const absoluteLandGradient = elevationGradient(ABSOLUTE_ELEVATION_STOPS, 0, ABSOLUTE_ELEVATION_MAX_M);
   const oceanExplorationGradient = elevationGradient(OCEAN_ELEVATION_STOPS, ABSOLUTE_ELEVATION_MIN_M, 0);
@@ -548,6 +555,19 @@ export default function App() {
                 <strong>Relieve del mapa</strong>
                 <span className={`topography-state topography-state--${explorationTerrainStatus}`}>{explorationStatusMessage}</span>
               </div>
+              <label className="exploration-theme-select" htmlFor="exploration-terrain-theme">
+                <span>Representación</span>
+                <select
+                  id="exploration-terrain-theme"
+                  value={explorationTerrainTheme}
+                  onChange={(event) => changeExplorationTerrainTheme(event.currentTarget.value as ExplorationTerrainTheme)}
+                >
+                  <option value="none">Ninguna</option>
+                  <option value="elevation">Elevación</option>
+                  <option value="slope">Pendientes</option>
+                  <option value="aspect">Orientación de laderas</option>
+                </select>
+              </label>
               <div className="topographic-toggle-list">
                 <div className="overlay-layer-row topographic-layer-row exploration-terrain-row">
                   <span className="overlay-symbol topographic-symbol topographic-symbol--hillshade" aria-hidden="true"><Mountain size={16} /></span>
@@ -556,15 +576,6 @@ export default function App() {
                     checked={explorationTerrainEnabled}
                     onCheckedChange={changeExplorationTerrainEnabled}
                     aria-label={`${explorationTerrainEnabled ? "Desactivar" : "Activar"} relieve sombreado`}
-                  />
-                </div>
-                <div className="overlay-layer-row topographic-layer-row exploration-terrain-row exploration-elevation-row">
-                  <span className="overlay-symbol topographic-symbol topographic-symbol--elevation" aria-hidden="true"><Layers size={16} /></span>
-                  <span className="layer-copy"><span className="layer-title">Elevación</span></span>
-                  <Switch
-                    checked={explorationElevationEnabled}
-                    onCheckedChange={changeExplorationElevationEnabled}
-                    aria-label={`${explorationElevationEnabled ? "Desactivar" : "Activar"} elevación del terreno`}
                   />
                 </div>
               </div>
@@ -585,31 +596,31 @@ export default function App() {
                       aria-label="Intensidad del relieve sombreado"
                     />
                   </label>
-                  <label className="topographic-opacity exploration-terrain-opacity" htmlFor="exploration-elevation-opacity">
-                    <span>Intensidad del color</span><output htmlFor="exploration-elevation-opacity">{explorationElevationOpacity} %</output>
+                  <label className="topographic-opacity exploration-terrain-opacity" htmlFor="exploration-theme-opacity">
+                    <span>Intensidad de la representación</span><output htmlFor="exploration-theme-opacity">{explorationThemeOpacity} %</output>
                     <input
-                      id="exploration-elevation-opacity"
+                      id="exploration-theme-opacity"
                       type="range"
                       min="0"
                       max="80"
                       step="5"
-                      value={explorationElevationOpacity}
-                      onChange={(event) => setExplorationElevationOpacity(Number(event.currentTarget.value))}
-                      aria-label="Intensidad del color de elevación"
+                      value={explorationThemeOpacity}
+                      onChange={(event) => setExplorationThemeOpacity(Number(event.currentTarget.value))}
+                      aria-label="Intensidad de la representación topográfica"
                     />
                   </label>
-                  <label className="exploration-elevation-mode" htmlFor="exploration-elevation-mode">
-                    <span>Colores</span>
-                    <select
-                      id="exploration-elevation-mode"
-                      value={explorationElevationMode}
-                      onChange={(event) => changeExplorationElevationMode(event.currentTarget.value as ExplorationElevationMode)}
-                    >
-                      <option value="adaptive">Adaptativos a la región</option>
-                      <option value="absolute">Escala absoluta</option>
-                    </select>
-                  </label>
-                  {explorationElevationEnabled && (
+                  {explorationTerrainTheme === "elevation" && <>
+                    <label className="exploration-elevation-mode" htmlFor="exploration-elevation-mode">
+                      <span>Colores</span>
+                      <select
+                        id="exploration-elevation-mode"
+                        value={explorationElevationMode}
+                        onChange={(event) => changeExplorationElevationMode(event.currentTarget.value as ExplorationElevationMode)}
+                      >
+                        <option value="adaptive">Adaptativos a la región</option>
+                        <option value="absolute">Escala absoluta</option>
+                      </select>
+                    </label>
                     <div className="exploration-elevation-legend" aria-label={`Leyenda de elevación ${visibleExplorationMode === "adaptive" ? "adaptativa" : "absoluta"} en metros`}>
                       <span className="elevation-legend-title">Altitud · metros</span>
                       <div className="exploration-elevation-legend__bands">
@@ -643,6 +654,29 @@ export default function App() {
                         </div>
                       </div>
                       {adaptiveScaleFallback && <span className="elevation-legend-note exploration-elevation-legend__fallback">Muestra insuficiente; se mantiene la escala absoluta.</span>}
+                    </div>
+                  </>}
+                  {explorationTerrainTheme === "slope" && (
+                    <div className="terrain-theme-legend" aria-label="Pendiente del terreno en porcentaje">
+                      <span className="elevation-legend-title">Pendiente · %</span>
+                      {SLOPE_CLASSES.map((slopeClass) => (
+                        <div className="terrain-theme-legend__row" key={slopeClass.label}>
+                          <i style={{ backgroundColor: slopeClass.color }} aria-hidden="true" />
+                          <span>{slopeClass.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {explorationTerrainTheme === "aspect" && (
+                    <div className="terrain-aspect-legend" aria-label="Orientación de laderas">
+                      <span className="elevation-legend-title">Orientación · azimut</span>
+                      <div className="terrain-aspect-compass" role="img" aria-label="Rosa de orientación: norte, noreste, este, sureste, sur, suroeste, oeste y noroeste">
+                        {ASPECT_CLASSES.map((aspectClass, index) => {
+                          const positions = ["1 / 2", "1 / 3", "2 / 3", "3 / 3", "3 / 2", "3 / 1", "2 / 1", "1 / 1"];
+                          return <span key={aspectClass.direction} style={{ backgroundColor: aspectClass.color, gridArea: positions[index] }} title={aspectClass.label}>{aspectClass.direction}</span>;
+                        })}
+                      </div>
+                      <span className="terrain-aspect-flat"><i style={{ backgroundColor: ASPECT_FLAT_COLOR }} aria-hidden="true" />Plana / sin orientación</span>
                     </div>
                   )}
                 </div>
@@ -707,8 +741,8 @@ export default function App() {
             measurementsLayer={drawingTools.measurementLayer}
             explorationTerrainEnabled={explorationTerrainEnabled}
             explorationTerrainOpacity={explorationTerrainOpacity}
-            explorationElevationEnabled={explorationElevationEnabled}
-            explorationElevationOpacity={explorationElevationOpacity}
+            explorationTerrainTheme={explorationTerrainTheme}
+            explorationThemeOpacity={explorationThemeOpacity}
             explorationElevationMode={explorationElevationMode}
             explorationElevationScale={explorationElevationScale}
             explorationElevationScaleRefresh={explorationElevationScaleRefresh}
