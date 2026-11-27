@@ -8,4 +8,6 @@
 - La pestaña Análisis muestra la ficha y mediciones geodésicas del elemento seleccionado. Las mediciones temporales permanecen separadas y ofrecen acciones visibles para terminar o cancelar el trazo.
 - La escala gráfica métrica y la lectura de medición se mantienen compactas en el borde inferior del mapa, también en pantallas pequeñas.
 - El selector compacto distingue mapas base de capas de análisis: Positron es la opción inicial, con Dark, Liberty, OpenStreetMap y QGIS como alternativas. Los estilos vectoriales se cargan bajo demanda sobre OpenLayers y sus atribuciones permanecen visibles.
-- Las capas de terreno y los elementos dibujados permanecen por encima del mapa base; las teselas renderizadas sirven solo para contexto visual, nunca como dato de cálculo.
+- Los terrenos preparados se configuran por área y conservan su visibilidad, tema y opacidad al cambiar de selección. Hillshade acompaña una sola representación temática; la elevación usa una leyenda local y pendientes/orientación conservan escalas comparables.
+- La topografía queda por debajo de las capas geográficas, los dibujos y las mediciones. Cada terreno se recorta con la geometría real y solo solicita WMS mientras esté visible y dentro de su extensión.
+- Las teselas renderizadas sirven solo para contexto visual, nunca como dato de cálculo.

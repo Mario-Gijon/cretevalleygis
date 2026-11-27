@@ -688,6 +688,10 @@ button {
   color: #a8433d;
 }
 
+.drawn-element-terrain--stale {
+  color: #98651f;
+}
+
 .drawn-element-button:hover,
 .drawn-element-button[aria-pressed="true"] {
   border-color: var(--border);
@@ -1007,6 +1011,32 @@ button {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.45;
+}
+
+.terrain-global-controls {
+  margin-top: 11px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.terrain-global-controls > summary {
+  width: fit-content;
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.terrain-global-controls > .terrain-coverage-note {
+  margin-bottom: 8px;
+}
+
+.elevation-legend-note {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
 }
 
 .terrain-coverage-note--empty {

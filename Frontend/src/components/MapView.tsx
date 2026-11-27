@@ -38,6 +38,7 @@ import {
   TOPOGRAPHIC_LAYERS,
   type TopographicLayerId,
 } from "@/lib/topographic-layers";
+import type { PreparedTerrainMapEntry } from "@/lib/prepared-terrain";
 import { CRETE_CENTER } from "@/lib/map-config";
 
 export type MapStatus = {
@@ -57,7 +58,13 @@ export type BaseMapLayers = {
   vector: VectorBaseMapLayers;
   overlays: OverlayLayers;
   topography: TopographicLayers;
-  regionalTopography: TopographicLayers;
+  regionalTerrains: LayerGroup;
+};
+type RegionalTerrainLayerGroup = {
+  group: LayerGroup;
+  layers: Partial<Record<TopographicLayerId, ImageLayer<ImageWMS>>>;
+  geometry: Polygon;
+  cleanup: () => void;
 };
 export type QgisStatus = "idle" | "loading" | "available" | "error";
 type VectorTileListenerCleanup = () => void;
@@ -68,12 +75,13 @@ type MapViewProps = {
   baseLayersRef: MutableRef<BaseMapLayers | null>;
   drawingsLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
   measurementsLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
-  terrainClipGeometry: Polygon | null;
+  preparedTerrains: PreparedTerrainMapEntry[];
   onStatusChange: (status: MapStatus) => void;
   onQgisStatusChange: (status: QgisStatus) => void;
   onOpenFreeMapStatusChange: (id: OpenFreeMapId, status: OpenFreeMapStatus) => void;
   onOverlayAvailabilityChange: (id: GeographicOverlayId, available: boolean) => void;
   onTopographicAvailabilityChange: (id: TopographicLayerId, available: boolean) => void;
+  onPreparedTerrainAvailabilityChange: (elementId: string, id: TopographicLayerId, available: boolean) => void;
   onMapReady: (map: Map) => (() => void) | void;
   onCenterChange: (
     center: [number, number],
@@ -88,12 +96,13 @@ export default function MapView({
   baseLayersRef,
   drawingsLayer,
   measurementsLayer,
-  terrainClipGeometry,
+  preparedTerrains,
   onStatusChange,
   onQgisStatusChange,
   onOpenFreeMapStatusChange,
   onOverlayAvailabilityChange,
   onTopographicAvailabilityChange,
+  onPreparedTerrainAvailabilityChange,
   onMapReady,
   onCenterChange,
 }: MapViewProps) {
@@ -103,9 +112,12 @@ export default function MapView({
   const vectorLoadedRef = useRef(new Set<OpenFreeMapId>());
   const vectorPromisesRef = useRef(new globalThis.Map<OpenFreeMapId, Promise<void>>());
   const vectorTileListenersRef = useRef(new globalThis.Map<OpenFreeMapId, VectorTileListenerCleanup[]>());
+  const regionalTerrainGroupsRef = useRef(new globalThis.Map<string, RegionalTerrainLayerGroup>());
+  const preparedAvailabilityRef = useRef(onPreparedTerrainAvailabilityChange);
   const activeBaseMapRef = useRef<BaseMapId | null>(null);
   const disposedRef = useRef(false);
   baseMapRef.current = baseMap;
+  preparedAvailabilityRef.current = onPreparedTerrainAvailabilityChange;
 
   useEffect(() => {
     if (!targetRef.current) return;
@@ -164,7 +176,7 @@ export default function MapView({
     const overlayLayers = Object.fromEntries(
       Object.entries(overlaySources).map(([id, source]) => [
         id,
-        new ImageLayer({ source, visible: ["boundaries", "localities"].includes(id) }),
+        new ImageLayer({ source, visible: ["boundaries", "localities"].includes(id), zIndex: 6 }),
       ]),
     ) as OverlayLayers;
     const topographicSources = Object.fromEntries(
@@ -194,34 +206,7 @@ export default function MapView({
         })];
       }),
     ) as TopographicLayers;
-    const regionalTerrainSources = Object.fromEntries(
-      Object.keys(TOPOGRAPHIC_LAYERS).map((id) => [
-        id,
-        new ImageWMS({
-          url: "/qgis/ogc/world",
-          ratio: 1,
-          hidpi: true,
-          interpolate: id !== "slope" && id !== "aspect",
-          params: {
-            VERSION: "1.3.0",
-            FORMAT: "image/png",
-            TRANSPARENT: true,
-          },
-          serverType: "qgis",
-        }),
-      ]),
-    ) as Record<TopographicLayerId, ImageWMS>;
-    const regionalTopographicLayers = Object.fromEntries(
-      Object.entries(regionalTerrainSources).map(([id, source]) => {
-        const layerId = id as TopographicLayerId;
-        return [layerId, new ImageLayer({
-          className: `regional-terrain-${layerId}`,
-          source,
-          visible: false,
-          opacity: DEFAULT_TOPOGRAPHIC_OPACITY[layerId] / 100,
-        })];
-      }),
-    ) as TopographicLayers;
+    const regionalTerrains = new LayerGroup({ layers: [] });
     const map = new OlMap({
       target: targetRef.current,
       pixelRatio: window.devicePixelRatio || 1,
@@ -233,10 +218,7 @@ export default function MapView({
         topographicLayers.hillshade,
         topographicLayers.slope,
         topographicLayers.aspect,
-        regionalTopographicLayers.elevation,
-        regionalTopographicLayers.slope,
-        regionalTopographicLayers.aspect,
-        regionalTopographicLayers.hillshade,
+        regionalTerrains,
         overlayLayers.boundaries,
         overlayLayers.localities,
         overlayLayers.rivers,
@@ -340,11 +322,6 @@ export default function MapView({
         source,
         layer: topographicLayers[id as TopographicLayerId],
       })),
-      ...Object.entries(regionalTerrainSources).map(([id, source]) => ({
-        id: id as TopographicLayerId,
-        source,
-        layer: regionalTopographicLayers[id as TopographicLayerId],
-      })),
     ].map(({ id: layerId, source, layer }) => {
       const onLoad = () => onTopographicAvailabilityChange(layerId, true);
       const onError = () => {
@@ -382,7 +359,7 @@ export default function MapView({
       vector: vectorBaseMapLayers,
       overlays: overlayLayers,
       topography: topographicLayers,
-      regionalTopography: regionalTopographicLayers,
+      regionalTerrains,
     };
     setMapGeneration((generation) => generation + 1);
     const updateCenter = () => {
@@ -429,6 +406,8 @@ export default function MapView({
       map.un("moveend", updateCenter);
       map.un("change:size", updateCenter);
       detachDrawingTools?.();
+      regionalTerrainGroupsRef.current.forEach((terrain) => terrain.cleanup());
+      regionalTerrainGroupsRef.current.clear();
       map.setTarget(undefined);
       mapRef.current = null;
       baseLayersRef.current = null;
@@ -535,31 +514,110 @@ export default function MapView({
 
   useEffect(() => {
     const map = mapRef.current;
-    const layers = baseLayersRef.current?.regionalTopography;
-    if (!map || !layers || !terrainClipGeometry) return;
+    const root = baseLayersRef.current?.regionalTerrains;
+    if (!map || !root) return;
+    const currentGroups = regionalTerrainGroupsRef.current;
+    const wantedIds = new Set(preparedTerrains.map((terrain) => terrain.elementId));
 
-    const maskFeature = new Feature({ geometry: terrainClipGeometry });
-    const maskStyle = new Style({ fill: new Fill({ color: "#ffffff" }) });
-    const clipLayer = (event: RenderEvent) => {
-      const context = event.context as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | undefined;
-      if (!context || !("globalCompositeOperation" in context)) return;
-      context.save();
-      context.globalCompositeOperation = "destination-in";
-      getVectorContext(event).drawFeature(maskFeature, maskStyle);
-      context.restore();
-    };
+    currentGroups.forEach((terrain, id) => {
+      if (wantedIds.has(id)) return;
+      terrain.cleanup();
+      root.getLayers().remove(terrain.group);
+      currentGroups.delete(id);
+    });
 
-    Object.values(layers).forEach((layer) => layer.on("postrender", clipLayer));
-    const geometryChanged = () => map.render();
-    terrainClipGeometry.on("change", geometryChanged);
+    const projection = map.getView().getProjection();
+    preparedTerrains.forEach((terrain) => {
+      let layerGroup = currentGroups.get(terrain.elementId);
+      const needsRebuild = !layerGroup || layerGroup.geometry !== terrain.geometry;
+      if (needsRebuild) {
+        if (layerGroup) {
+          layerGroup.cleanup();
+          root.getLayers().remove(layerGroup.group);
+        }
+        const extent = transformExtent(
+          terrain.result.coverage.extent_wgs84,
+          "EPSG:4326",
+          projection,
+          8,
+        );
+        const layers: Partial<Record<TopographicLayerId, ImageLayer<ImageWMS>>> = {};
+        const disposers: Array<() => void> = [];
+        (Object.keys(TOPOGRAPHIC_LAYERS) as TopographicLayerId[]).forEach((id) => {
+          const layerName = terrain.result.cartography.layers[id];
+          if (!layerName) return;
+          const source = new ImageWMS({
+            url: "/qgis/ogc/world",
+            ratio: 1,
+            hidpi: true,
+            interpolate: id !== "slope" && id !== "aspect",
+            params: {
+              MAP: terrain.result.cartography.map_parameter,
+              LAYERS: layerName,
+              VERSION: "1.3.0",
+              FORMAT: "image/png",
+              TRANSPARENT: true,
+            },
+            serverType: "qgis",
+          });
+          const layer = new ImageLayer({
+            className: `terrain-clip-${terrain.elementId}-${id}`,
+            source,
+            extent,
+            visible: false,
+            opacity: terrain.opacity[id] / 100,
+          });
+          const maskFeature = new Feature({ geometry: terrain.geometry });
+          const maskStyle = new Style({ fill: new Fill({ color: "#ffffff" }) });
+          const clipLayer = (event: RenderEvent) => {
+            const context = event.context as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | undefined;
+            if (!context || !("globalCompositeOperation" in context)) return;
+            context.save();
+            context.globalCompositeOperation = "destination-in";
+            getVectorContext(event).drawFeature(maskFeature, maskStyle);
+            context.restore();
+          };
+          const geometryChanged = () => map.render();
+          const onLoad = () => preparedAvailabilityRef.current(terrain.elementId, id, true);
+          const onError = () => {
+            if (layer.getVisible()) preparedAvailabilityRef.current(terrain.elementId, id, false);
+          };
+          layer.on("postrender", clipLayer);
+          terrain.geometry.on("change", geometryChanged);
+          source.on("imageloadend", onLoad);
+          source.on("imageloaderror", onError);
+          disposers.push(() => {
+            layer.un("postrender", clipLayer);
+            terrain.geometry.un("change", geometryChanged);
+            source.un("imageloadend", onLoad);
+            source.un("imageloaderror", onError);
+          });
+          layers[id] = layer;
+        });
+        const group = new LayerGroup({ layers: Object.values(layers) });
+        group.setExtent(extent);
+        layerGroup = {
+          group,
+          layers,
+          geometry: terrain.geometry,
+          cleanup: () => disposers.forEach((dispose) => dispose()),
+        };
+        currentGroups.set(terrain.elementId, layerGroup);
+        root.getLayers().push(layerGroup.group);
+      }
+      if (!layerGroup) return;
+
+      layerGroup.group.setVisible(terrain.visible);
+      (Object.keys(TOPOGRAPHIC_LAYERS) as TopographicLayerId[]).forEach((id) => {
+        const layer = layerGroup!.layers[id];
+        if (!layer) return;
+        layer.setOpacity(terrain.opacity[id] / 100);
+        layer.setVisible(terrain.visible && terrain.visibility[id]);
+      });
+      layerGroup.group.setZIndex(terrain.selected ? 5 : 4);
+    });
     map.render();
-
-    return () => {
-      Object.values(layers).forEach((layer) => layer.un("postrender", clipLayer));
-      terrainClipGeometry.un("change", geometryChanged);
-      map.render();
-    };
-  }, [baseLayersRef, mapGeneration, mapRef, terrainClipGeometry]);
+  }, [baseLayersRef, mapGeneration, mapRef, preparedTerrains]);
 
   return (
     <div

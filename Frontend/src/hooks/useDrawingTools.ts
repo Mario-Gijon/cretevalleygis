@@ -162,7 +162,7 @@ export function useDrawingTools() {
   const [source] = useState(() => new VectorSource<Feature<Geometry>>({ wrapX: false }));
   const [layer] = useState(() => new VectorLayer({
     source,
-    style: (feature) => feature.get("terrainActive") ? terrainFeatureStyle : featureStyle,
+    style: (feature) => feature.get("terrainPrepared") ? terrainFeatureStyle : featureStyle,
     zIndex: 10,
   }));
   const [measurementSource] = useState(() => new VectorSource<Feature<Geometry>>({ wrapX: false }));
@@ -190,7 +190,7 @@ export function useDrawingTools() {
   const tracePausedRef = useRef(false);
   const nextIdRef = useRef(1);
   const countsRef = useRef<Record<DrawingGeometry, number>>({ Point: 0, LineString: 0, Polygon: 0 });
-  const terrainFeatureIdRef = useRef<string | null>(null);
+  const preparedTerrainIdsRef = useRef(new Set<string>());
 
   const refreshElements = useCallback(() => {
     setElements(
@@ -274,7 +274,7 @@ export function useDrawingTools() {
       features: selectedFeatures,
       layers: [layer],
       hitTolerance: 8,
-      style: (feature) => feature.get("terrainActive") ? selectedTerrainStyle : selectedStyle,
+      style: (feature) => feature.get("terrainPrepared") ? selectedTerrainStyle : selectedStyle,
     });
     const modify = new Modify({ features: selectedFeatures, pixelTolerance: 12 });
     const traceGuard = new Interaction({
@@ -560,14 +560,15 @@ export function useDrawingTools() {
     refreshSelection();
   }, [refreshElements, refreshSelection, source]);
 
-  const setTerrainFeatureId = useCallback((id: string | null) => {
-    const previousId = terrainFeatureIdRef.current;
-    if (previousId === id) return;
-    if (previousId) source.getFeatureById(previousId)?.set("terrainActive", false);
-
-    const feature = id ? source.getFeatureById(id) : null;
-    terrainFeatureIdRef.current = feature?.getGeometry()?.getType() === "Polygon" ? id : null;
-    feature?.set("terrainActive", terrainFeatureIdRef.current !== null);
+  const setPreparedTerrainIds = useCallback((ids: string[]) => {
+    const nextIds = new Set(ids);
+    const changedIds = new Set([...preparedTerrainIdsRef.current, ...nextIds]);
+    preparedTerrainIdsRef.current = nextIds;
+    changedIds.forEach((id) => {
+      const feature = source.getFeatureById(id);
+      if (!feature || feature.getGeometry()?.getType() !== "Polygon") return;
+      feature.set("terrainPrepared", nextIds.has(id));
+    });
   }, [source]);
 
   return {
@@ -596,6 +597,6 @@ export function useDrawingTools() {
     deleteSelected,
     deleteElement,
     renameElement,
-    setTerrainFeatureId,
+    setPreparedTerrainIds,
   };
 }

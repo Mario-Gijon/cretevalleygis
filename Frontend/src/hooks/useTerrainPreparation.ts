@@ -59,9 +59,20 @@ function wait(milliseconds: number): Promise<void> {
 export function useTerrainPreparation() {
   const [jobs, setJobs] = useState<TerrainPreparationJobs>({});
   const jobsRef = useRef<TerrainPreparationJobs>({});
+  const jobVersionsRef = useRef(new Map<string, number>());
 
-  const updateJob = useCallback((elementId: string, job: TerrainPreparationView) => {
+  const updateJob = useCallback((elementId: string, job: TerrainPreparationView, version?: number) => {
+    if (version !== undefined && jobVersionsRef.current.get(elementId) !== version) return;
     const updated = { ...jobsRef.current, [elementId]: job };
+    jobsRef.current = updated;
+    setJobs(updated);
+  }, []);
+
+  const removeJob = useCallback((elementId: string) => {
+    jobVersionsRef.current.set(elementId, (jobVersionsRef.current.get(elementId) ?? 0) + 1);
+    if (!(elementId in jobsRef.current)) return;
+    const updated = { ...jobsRef.current };
+    delete updated[elementId];
     jobsRef.current = updated;
     setJobs(updated);
   }, []);
@@ -74,7 +85,9 @@ export function useTerrainPreparation() {
     const current = jobsRef.current[elementId];
     if (current?.state === "submitting" || current?.state === "running") return;
 
-    updateJob(elementId, { state: "submitting", message: "Enviando la solicitud…" });
+    const version = (jobVersionsRef.current.get(elementId) ?? 0) + 1;
+    jobVersionsRef.current.set(elementId, version);
+    updateJob(elementId, { state: "submitting", message: "Enviando la solicitud…" }, version);
     try {
       const response = await fetch("/api/terrain/jobs", {
         method: "POST",
@@ -82,8 +95,9 @@ export function useTerrainPreparation() {
         body: JSON.stringify({ area_name: areaName, bbox_wgs84: bboxWgs84 }),
       });
       const data = await response.json() as TerrainJobResponse & ApiErrorBody;
+      if (jobVersionsRef.current.get(elementId) !== version) return;
       if (!response.ok) {
-        updateJob(elementId, { state: "error", message: apiErrorMessage(response.status, data) });
+        updateJob(elementId, { state: "error", message: apiErrorMessage(response.status, data) }, version);
         return;
       }
 
@@ -95,7 +109,7 @@ export function useTerrainPreparation() {
           message: data.reused || result.preparation.reused ? "Terreno preparado · datos reutilizados." : "Terreno preparado.",
           result,
           reused: data.reused || result.preparation.reused,
-        });
+        }, version);
         return;
       }
 
@@ -103,20 +117,22 @@ export function useTerrainPreparation() {
         state: "running",
         jobId: data.job_id,
         message: "Preparando el terreno. Puedes seguir usando el mapa.",
-      });
+      }, version);
 
       for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
         await wait(POLL_INTERVAL_MS);
+        if (jobVersionsRef.current.get(elementId) !== version) return;
         const statusResponse = await fetch(`/api/terrain/jobs/${encodeURIComponent(data.job_id)}`);
         if (!statusResponse.ok) throw new Error("status-unavailable");
         const status = await statusResponse.json() as TerrainJobResponse;
+        if (jobVersionsRef.current.get(elementId) !== version) return;
 
         if (status.status === "failed") {
           updateJob(elementId, {
             state: "error",
             jobId: data.job_id,
             message: preparationFailureMessage(status.error ?? ""),
-          });
+          }, version);
           return;
         }
         if (status.status === "completed") {
@@ -127,17 +143,18 @@ export function useTerrainPreparation() {
             message: status.reused || result.preparation.reused ? "Terreno preparado · datos reutilizados." : "Terreno preparado.",
             result,
             reused: status.reused || result.preparation.reused,
-          });
+          }, version);
           return;
         }
       }
       throw new Error("preparation-timeout");
     } catch (error) {
+      if (jobVersionsRef.current.get(elementId) !== version) return;
       const detail = error instanceof Error ? error.message : "";
       const message = detail === "preparation-timeout"
         ? "La preparación está tardando más de lo esperado. Puedes volver a consultar esta área más tarde."
         : "No se pudo conectar con el servicio de preparación. El mapa base y las herramientas siguen funcionando.";
-      updateJob(elementId, { state: "error", message });
+      updateJob(elementId, { state: "error", message }, version);
     }
   }, [updateJob]);
 
@@ -147,6 +164,8 @@ export function useTerrainPreparation() {
   ): Promise<TerrainPreparationResult | null> => {
     const current = jobsRef.current[elementId];
     if (!current || current.state !== "completed" || !current.result) return null;
+    const version = jobVersionsRef.current.get(elementId);
+    if (version === undefined || current.jobId !== jobId) return null;
     if (current.derivatives?.state === "submitting" || current.derivatives?.state === "queued" || current.derivatives?.state === "running") {
       return null;
     }
@@ -157,7 +176,7 @@ export function useTerrainPreparation() {
       options: { result?: TerrainPreparationResult; error?: string } = {},
     ) => {
       const previous = jobsRef.current[elementId];
-      if (!previous) return;
+      if (!previous || jobVersionsRef.current.get(elementId) !== version || previous.jobId !== jobId) return;
       const next = {
         ...previous,
         ...(options.result ? { result: options.result } : {}),
@@ -171,6 +190,7 @@ export function useTerrainPreparation() {
     try {
       const response = await fetch(`/api/terrain/jobs/${encodeURIComponent(jobId)}/derivatives`, { method: "POST" });
       const data = await response.json() as TerrainJobResponse & ApiErrorBody;
+      if (jobVersionsRef.current.get(elementId) !== version) return null;
       if (!response.ok) {
         const message = apiErrorMessage(response.status, data);
         updateDerivatives("error", message, { error: message });
@@ -179,6 +199,7 @@ export function useTerrainPreparation() {
 
       if (data.derivatives?.status === "completed") {
         const result = data.result ?? await readResult(jobId);
+        if (jobVersionsRef.current.get(elementId) !== version) return null;
         if (!result.derivatives) throw new Error("derivative-result-unavailable");
         const message = result.derivatives.reused
           ? "Pendientes y orientación disponibles · productos reutilizados."
@@ -195,9 +216,11 @@ export function useTerrainPreparation() {
       updateDerivatives("running", "Calculando pendientes y orientación. Puedes seguir usando el mapa.");
       for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
         await wait(POLL_INTERVAL_MS);
+        if (jobVersionsRef.current.get(elementId) !== version) return null;
         const statusResponse = await fetch(`/api/terrain/jobs/${encodeURIComponent(jobId)}`);
         if (!statusResponse.ok) throw new Error("status-unavailable");
         const status = await statusResponse.json() as TerrainJobResponse;
+        if (jobVersionsRef.current.get(elementId) !== version) return null;
         const derivativeStatus = status.derivatives;
         if (derivativeStatus?.status === "failed") {
           const message = "No se pudieron preparar las pendientes y la orientación. La elevación y el relieve siguen disponibles.";
@@ -206,6 +229,7 @@ export function useTerrainPreparation() {
         }
         if (derivativeStatus?.status === "completed") {
           const result = status.result ?? await readResult(jobId);
+          if (jobVersionsRef.current.get(elementId) !== version) return null;
           if (!result.derivatives) throw new Error("derivative-result-unavailable");
           const message = result.derivatives.reused
             ? "Pendientes y orientación disponibles · productos reutilizados."
@@ -219,6 +243,7 @@ export function useTerrainPreparation() {
       }
       throw new Error("derivative-preparation-timeout");
     } catch (error) {
+      if (jobVersionsRef.current.get(elementId) !== version) return null;
       const message = error instanceof Error && error.message === "derivative-preparation-timeout"
         ? "El cálculo superó el tiempo de espera. La elevación y el relieve siguen disponibles."
         : "No se pudieron preparar las capas derivadas. La elevación y el relieve siguen disponibles.";
@@ -227,7 +252,7 @@ export function useTerrainPreparation() {
     }
   }, []);
 
-  return { jobs, prepareTerrain, prepareDerivatives };
+  return { jobs, prepareTerrain, prepareDerivatives, removeJob };
 }
 
 async function readResult(jobId: string): Promise<TerrainPreparationResult> {

@@ -4,27 +4,30 @@ import { Button } from "@/components/ui/button";
 import type { SelectedElementInfo } from "@/hooks/useDrawingTools";
 import { formatArea, formatCoordinate, formatDistance } from "@/lib/geometry-metrics";
 import type { TerrainPreparationView } from "@/lib/terrain-preparation";
+import type { PreparedTerrainState } from "@/lib/prepared-terrain";
 
 type GeometryDetailsProps = {
   element: SelectedElementInfo;
   onRename: (id: string, name: string) => void;
   terrainPreparation?: TerrainPreparationView;
-  terrainIsActive: boolean;
+  preparedTerrain?: PreparedTerrainState;
   onPrepareTerrain: (id: string, name: string, bbox: [number, number, number, number]) => void;
   onShowPreparedTerrain: (id: string) => void;
-  onClosePreparedTerrain: () => void;
-  onCenterPreparedTerrain: () => void;
+  onSetTerrainVisible: (id: string, visible: boolean) => void;
+  onCenterPreparedTerrain: (id: string) => void;
+  onPrepareDerivatives: (id: string, jobId: string) => void;
 };
 
 export function GeometryDetails({
   element,
   onRename,
   terrainPreparation,
-  terrainIsActive,
+  preparedTerrain,
   onPrepareTerrain,
   onShowPreparedTerrain,
-  onClosePreparedTerrain,
+  onSetTerrainVisible,
   onCenterPreparedTerrain,
+  onPrepareDerivatives,
 }: GeometryDetailsProps) {
   const [name, setName] = useState(element?.name ?? "");
 
@@ -115,14 +118,14 @@ export function GeometryDetails({
                 <Check size={14} aria-hidden="true" />
                 <span>{terrainPreparation.message} · {terrainPreparation.result?.coverage.resolution_m} m</span>
               </p>
-              {terrainIsActive ? (
+              {preparedTerrain ? (
                 <div className="terrain-preparation-actions">
-                  <Button variant="outline" size="small" onClick={onCenterPreparedTerrain}>
+                  <Button variant="outline" size="small" onClick={() => onCenterPreparedTerrain(element.id)}>
                     <MapPinned size={14} aria-hidden="true" />
                     Centrar mapa
                   </Button>
-                  <Button variant="ghost" size="small" onClick={onClosePreparedTerrain}>
-                    Cerrar visualización
+                  <Button variant="ghost" size="small" onClick={() => onSetTerrainVisible(element.id, !preparedTerrain.visible)}>
+                    {preparedTerrain.visible ? "Ocultar terreno" : "Mostrar terreno"}
                   </Button>
                 </div>
               ) : (
@@ -130,6 +133,27 @@ export function GeometryDetails({
                   <MapPinned size={14} aria-hidden="true" />
                   Ver terreno preparado
                 </Button>
+              )}
+              {preparedTerrain && !preparedTerrain.result.derivatives && (
+                <div className="terrain-derivative-preparation">
+                  <p>Prepara pendientes y orientación con los datos ya descargados.</p>
+                  <Button
+                    variant="outline"
+                    size="small"
+                    className="terrain-derivative-button"
+                    disabled={!(terrainPreparation.jobId ?? preparedTerrain.jobId) || terrainPreparation.derivatives?.state === "submitting" || terrainPreparation.derivatives?.state === "queued" || terrainPreparation.derivatives?.state === "running"}
+                    onClick={() => {
+                      const jobId = terrainPreparation.jobId ?? preparedTerrain.jobId;
+                      if (jobId) onPrepareDerivatives(element.id, jobId);
+                    }}
+                  >
+                    {terrainPreparation.derivatives?.state === "submitting" || terrainPreparation.derivatives?.state === "queued" || terrainPreparation.derivatives?.state === "running"
+                      ? <LoaderCircle size={14} className="spinner" aria-hidden="true" />
+                      : <Mountain size={14} aria-hidden="true" />}
+                    {terrainPreparation.derivatives?.state === "submitting" || terrainPreparation.derivatives?.state === "queued" || terrainPreparation.derivatives?.state === "running" ? "Preparando capas…" : "Preparar pendientes y orientación"}
+                  </Button>
+                  {terrainPreparation.derivatives?.message && <p className="terrain-derivative-status" role="status">{terrainPreparation.derivatives.message}</p>}
+                </div>
               )}
             </>
           ) : (

@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Check, MapPin, Pencil, Pentagon, Route, Trash2, X } from "lucide-react";
+import { Check, Eye, EyeOff, MapPin, MapPinned, Pencil, Pentagon, Route, Trash2, X } from "lucide-react";
 import type { DrawnElement } from "@/hooks/useDrawingTools";
 import type { TerrainPreparationView } from "@/lib/terrain-preparation";
+import type { PreparedTerrainState } from "@/lib/prepared-terrain";
 
 type DrawnElementsListProps = {
   elements: DrawnElement[];
@@ -10,6 +11,9 @@ type DrawnElementsListProps = {
   onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
   terrainJobs: Record<string, TerrainPreparationView | undefined>;
+  preparedTerrains: Record<string, PreparedTerrainState>;
+  onToggleTerrain: (id: string, visible: boolean) => void;
+  onCenterTerrain: (id: string) => void;
 };
 
 const geometryLabels = {
@@ -18,7 +22,7 @@ const geometryLabels = {
   Polygon: "Área",
 } as const;
 
-export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, onDelete, terrainJobs }: DrawnElementsListProps) {
+export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, onDelete, terrainJobs, preparedTerrains, onToggleTerrain, onCenterTerrain }: DrawnElementsListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
 
@@ -41,9 +45,12 @@ export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, on
                 ? Route
                 : Pentagon;
             const job = terrainJobs[element.id];
+            const preparedTerrain = preparedTerrains[element.id];
             const resultExtent = job?.result?.coverage.extent_wgs84;
             const preparedMatches = Boolean(element.bboxWgs84 && resultExtent && element.bboxWgs84.every((value, index) => Math.abs(value - resultExtent[index]) < 1e-7));
-            const terrainStatus = job?.state === "completed" && preparedMatches
+            const terrainStatus = preparedTerrain
+              ? `Terreno preparado · ${preparedTerrain.result.coverage.resolution_m} m · ${preparedTerrain.visible ? "visible" : "oculto"}`
+              : job?.state === "completed" && preparedMatches
               ? `Terreno preparado · ${job.result?.coverage.resolution_m ?? 30} m`
               : job?.state === "completed"
                 ? "Área modificada · vuelve a preparar el terreno"
@@ -95,6 +102,16 @@ export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, on
                       <MapPin className="drawn-element-focus" size={15} aria-hidden="true" />
                     </button>
                     <div className="drawn-element-actions">
+                      {preparedTerrain && (
+                        <>
+                          <button type="button" title={preparedTerrain.visible ? "Ocultar terreno" : "Mostrar terreno"} aria-label={`${preparedTerrain.visible ? "Ocultar" : "Mostrar"} terreno de ${element.name}`} onClick={() => onToggleTerrain(element.id, !preparedTerrain.visible)}>
+                            {preparedTerrain.visible ? <EyeOff size={14} /> : <Eye size={14} />}
+                          </button>
+                          <button type="button" title="Centrar terreno" aria-label={`Centrar terreno de ${element.name}`} onClick={() => { onFocus(element.id); onCenterTerrain(element.id); }}>
+                            <MapPinned size={14} />
+                          </button>
+                        </>
+                      )}
                       <button
                         type="button"
                         aria-label={`Renombrar ${element.name}`}
