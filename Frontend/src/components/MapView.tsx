@@ -217,7 +217,11 @@ export default function MapView({
         ...Object.values(vectorBaseMapLayers),
         topographicLayers.elevation,
         topographicLayers.hillshade,
+        topographicLayers.slope,
+        topographicLayers.aspect,
         regionalTopographicLayers.elevation,
+        regionalTopographicLayers.slope,
+        regionalTopographicLayers.aspect,
         regionalTopographicLayers.hillshade,
         overlayLayers.boundaries,
         overlayLayers.localities,
@@ -530,19 +534,17 @@ export default function MapView({
       context.restore();
     };
 
-    layers.elevation.on("postrender", clipLayer);
-    layers.hillshade.on("postrender", clipLayer);
+    Object.values(layers).forEach((layer) => layer.on("postrender", clipLayer));
     const geometryChanged = () => map.render();
     terrainClipGeometry.on("change", geometryChanged);
     map.render();
 
     return () => {
-      layers.elevation.un("postrender", clipLayer);
-      layers.hillshade.un("postrender", clipLayer);
+      Object.values(layers).forEach((layer) => layer.un("postrender", clipLayer));
       terrainClipGeometry.un("change", geometryChanged);
       map.render();
     };
-  }, [baseLayersRef, mapRef, terrainClipGeometry]);
+  }, [baseLayersRef, mapGeneration, mapRef, terrainClipGeometry]);
 
   return (
     <div

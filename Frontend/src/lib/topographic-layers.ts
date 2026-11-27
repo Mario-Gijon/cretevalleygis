@@ -11,6 +11,16 @@ export const TOPOGRAPHIC_LAYERS = {
     wmsLayer: "terrain_elevation",
     globalWmsLayer: "terrain_elevation_global",
   },
+  slope: {
+    title: "Pendientes",
+    description: "Pendiente del terreno · porcentaje",
+    wmsLayer: "terrain_slope",
+  },
+  aspect: {
+    title: "Orientación de laderas",
+    description: "Dirección de caída · grados desde norte de cuadrícula",
+    wmsLayer: "terrain_aspect",
+  },
 } as const;
 
 export type TopographicLayerId = keyof typeof TOPOGRAPHIC_LAYERS;
@@ -39,11 +49,15 @@ export const TERRAIN_VISIBILITY_THRESHOLDS = {
 export const DEFAULT_TOPOGRAPHIC_VISIBILITY: TopographicVisibility = {
   hillshade: false,
   elevation: false,
+  slope: false,
+  aspect: false,
 };
 
 export const DEFAULT_TOPOGRAPHIC_OPACITY: TopographicOpacity = {
   hillshade: 25,
   elevation: 65,
+  slope: 80,
+  aspect: 80,
 };
 
 export type TerrainRenderMode = "global" | "detailed" | "hidden";

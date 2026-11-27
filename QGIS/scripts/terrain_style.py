@@ -11,6 +11,7 @@ from qgis.core import (
     QgsSingleBandPseudoColorRenderer,
 )
 from qgis.PyQt.QtGui import QColor
+from terrain_derivative_config import ASPECT_SHADER_ITEMS, SLOPE_BREAKS
 from terrain_style_config import regional_elevation_style
 
 
@@ -90,3 +91,41 @@ def style_hillshade(layer: QgsRasterLayer) -> None:
     renderer.setContrastEnhancement(enhancement)
     layer.setRenderer(renderer)
     set_visual_resampling(layer)
+
+
+def style_slope(layer: QgsRasterLayer) -> None:
+    """Render percent slope with fixed, discrete classes across all regions."""
+    items = [
+        QgsColorRampShader.ColorRampItem(
+            entry["value"], QColor(entry["color"]), entry["label"]
+        )
+        for entry in SLOPE_BREAKS
+    ]
+    items.append(QgsColorRampShader.ColorRampItem(1_000_000.0, QColor(SLOPE_BREAKS[-1]["color"]), ""))
+    color_shader = QgsColorRampShader(0.0, 1_000_000.0)
+    color_shader.setColorRampType(QgsColorRampShader.Discrete)
+    color_shader.setColorRampItemList(items)
+    raster_shader = QgsRasterShader(0.0, 1_000_000.0)
+    raster_shader.setRasterShaderFunction(color_shader)
+    layer.setRenderer(QgsSingleBandPseudoColorRenderer(layer.dataProvider(), 1, raster_shader))
+    # Slope colors are classified after value resampling; bilinear sampling
+    # softens numerical noise without interpolating the palette itself.
+    set_visual_resampling(layer)
+
+
+def style_aspect(layer: QgsRasterLayer) -> None:
+    """Render compass directions as discrete categories, including flat cells."""
+    items = [
+        QgsColorRampShader.ColorRampItem(
+            entry["value"], QColor(entry["color"]), entry["label"]
+        )
+        for entry in ASPECT_SHADER_ITEMS
+    ]
+    color_shader = QgsColorRampShader(-1.0, 360.0)
+    color_shader.setColorRampType(QgsColorRampShader.Discrete)
+    color_shader.setColorRampItemList(items)
+    raster_shader = QgsRasterShader(-1.0, 360.0)
+    raster_shader.setRasterShaderFunction(color_shader)
+    layer.setRenderer(QgsSingleBandPseudoColorRenderer(layer.dataProvider(), 1, raster_shader))
+    # Leave QGIS at its native nearest-neighbour resampling so direction
+    # categories and the flat sentinel never blend into other colours.

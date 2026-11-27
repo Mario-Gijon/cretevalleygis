@@ -118,4 +118,16 @@ docker compose up -d --build backend
 docker compose stop backend
 ```
 
+## Pendientes y orientación de laderas
+
+Desde un terreno regional ya preparado, el panel **Topografía** permite generar pendientes y orientación con `POST /api/terrain/jobs/{job_id}/derivatives`. El backend reutiliza el GeoTIFF de elevación almacenado; no descarga ni reprocesa el DEM. El trabajo utiliza la cola de un único proceso existente y respeta el timeout y el límite de 768 MiB del backend. GDAL procesa las dos salidas de forma secuencial con Horn, bloques y compresión DEFLATE.
+
+Las pendientes se guardan como valores Float32 en porcentaje de ascenso; su leyenda QGIS mantiene clases fijas de 0–5, 5–15, 15–30, 30–60 y más de 60 %. La orientación se guarda como azimut Float32 en grados, en sentido horario desde el **norte de cuadrícula** del CRS métrico proyectado. Los bordes sin vecindad suficiente y las superficies planas conservan NoData (`-9999`) en el ráster numérico. Para mostrar las superficies planas como «sin orientación», un ráster de visualización separado usa el código `-1`; ese código no se mezcla con el producto numérico de análisis. La capa de orientación se remuestrea por vecino más cercano para mantener las ocho clases cardinales e intercardinales discretas.
+
+Ambas salidas conservan la resolución de la elevación preparada (30 m), su proyección y NoData. Sus metadatos registran fuente Copernicus DEM GLO-30 Public, huella SHA-256 de la elevación, CRS y unidades horizontales/verticales, algoritmo, unidades del producto y referencia norte. Los rásteres se almacenan junto al terreno regional en el volumen persistente `qgis_world_data`; el producto de orientación para visualización se identifica como tal y la API conserva las rutas de los productos numéricos para futuros análisis zonales. QGIS Server expone `terrain_slope` y `terrain_aspect` dentro del proyecto regional. En el visor solo se muestra una capa temática a la vez, opcionalmente combinada con el relieve sombreado, recortada visualmente por el polígono seleccionado; ambas capas empiezan desactivadas.
+
+La derivación puede pedirse desde la ficha del polígono con un terreno preparado. El estado aparece sin bloquear la navegación; al completarse, se habilitan los controles de visibilidad y opacidad y sus leyendas. Para volver a solicitar los productos mediante la API, repite la petición al mismo endpoint: los rásteres existentes se reutilizan si coinciden la elevación, la cuadrícula, los archivos y sus checksums.
+
+GDAL documenta el algoritmo Horn y las unidades de salida en [gdaldem](https://gdal.org/en/stable/programs/gdaldem.html). Los resultados son capas derivadas para inspección y preparación de análisis; este hito no calcula estadísticas zonales ni criterios del DSS.
+
 El estado de trabajos en curso vive en memoria y se pierde si se reinicia el backend. Los trabajos completados se reconstruyen desde sus resultados persistidos en el volumen y siguen disponibles por identificador. Es una cola de un único proceso para desarrollo local, no un servicio de procesamiento distribuido.

@@ -141,7 +141,93 @@ export function useTerrainPreparation() {
     }
   }, [updateJob]);
 
-  return { jobs, prepareTerrain };
+  const prepareDerivatives = useCallback(async (
+    elementId: string,
+    jobId: string,
+  ): Promise<TerrainPreparationResult | null> => {
+    const current = jobsRef.current[elementId];
+    if (!current || current.state !== "completed" || !current.result) return null;
+    if (current.derivatives?.state === "submitting" || current.derivatives?.state === "queued" || current.derivatives?.state === "running") {
+      return null;
+    }
+
+    const updateDerivatives = (
+      state: NonNullable<TerrainPreparationView["derivatives"]>["state"],
+      message: string,
+      options: { result?: TerrainPreparationResult; error?: string } = {},
+    ) => {
+      const previous = jobsRef.current[elementId];
+      if (!previous) return;
+      const next = {
+        ...previous,
+        ...(options.result ? { result: options.result } : {}),
+        derivatives: { state, message, ...(options.error ? { error: options.error } : {}) },
+      };
+      jobsRef.current = { ...jobsRef.current, [elementId]: next };
+      setJobs(jobsRef.current);
+    };
+
+    updateDerivatives("submitting", "Enviando la solicitud de pendientes y orientación…");
+    try {
+      const response = await fetch(`/api/terrain/jobs/${encodeURIComponent(jobId)}/derivatives`, { method: "POST" });
+      const data = await response.json() as TerrainJobResponse & ApiErrorBody;
+      if (!response.ok) {
+        const message = apiErrorMessage(response.status, data);
+        updateDerivatives("error", message, { error: message });
+        return null;
+      }
+
+      if (data.derivatives?.status === "completed") {
+        const result = data.result ?? await readResult(jobId);
+        if (!result.derivatives) throw new Error("derivative-result-unavailable");
+        const message = result.derivatives.reused
+          ? "Pendientes y orientación disponibles · productos reutilizados."
+          : "Pendientes y orientación preparadas.";
+        updateDerivatives("completed", message, { result });
+        return result;
+      }
+      if (data.derivatives?.status === "failed") {
+        const message = "No se pudieron preparar las pendientes y la orientación. La elevación y el relieve siguen disponibles.";
+        updateDerivatives("error", message, { error: data.derivatives.error ?? message });
+        return null;
+      }
+
+      updateDerivatives("running", "Calculando pendientes y orientación. Puedes seguir usando el mapa.");
+      for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
+        await wait(POLL_INTERVAL_MS);
+        const statusResponse = await fetch(`/api/terrain/jobs/${encodeURIComponent(jobId)}`);
+        if (!statusResponse.ok) throw new Error("status-unavailable");
+        const status = await statusResponse.json() as TerrainJobResponse;
+        const derivativeStatus = status.derivatives;
+        if (derivativeStatus?.status === "failed") {
+          const message = "No se pudieron preparar las pendientes y la orientación. La elevación y el relieve siguen disponibles.";
+          updateDerivatives("error", message, { error: derivativeStatus.error ?? message });
+          return null;
+        }
+        if (derivativeStatus?.status === "completed") {
+          const result = status.result ?? await readResult(jobId);
+          if (!result.derivatives) throw new Error("derivative-result-unavailable");
+          const message = result.derivatives.reused
+            ? "Pendientes y orientación disponibles · productos reutilizados."
+            : "Pendientes y orientación preparadas.";
+          updateDerivatives("completed", message, { result });
+          return result;
+        }
+        if (derivativeStatus?.status === "queued") {
+          updateDerivatives("queued", "Pendientes y orientación en cola. Puedes seguir usando el mapa.");
+        }
+      }
+      throw new Error("derivative-preparation-timeout");
+    } catch (error) {
+      const message = error instanceof Error && error.message === "derivative-preparation-timeout"
+        ? "El cálculo superó el tiempo de espera. La elevación y el relieve siguen disponibles."
+        : "No se pudieron preparar las capas derivadas. La elevación y el relieve siguen disponibles.";
+      updateDerivatives("error", message, { error: message });
+      return null;
+    }
+  }, []);
+
+  return { jobs, prepareTerrain, prepareDerivatives };
 }
 
 async function readResult(jobId: string): Promise<TerrainPreparationResult> {

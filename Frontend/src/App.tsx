@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import {
   Check,
+  Compass,
   CornerUpLeft,
   Droplets,
   Layers,
@@ -17,6 +18,7 @@ import {
   Plus,
   Play,
   Sun,
+  TrendingUp,
   Waves,
   X,
 } from "lucide-react";
@@ -74,6 +76,13 @@ const BASE_MAP_OPTIONS: Array<{ id: BaseMapId; title: string; description: strin
   { id: "qgis", title: "Crete Valley GIS", description: "Cartografía propia · Natural Earth" },
 ];
 
+const TOPOGRAPHIC_LAYER_OPTIONS = [
+  ["hillshade", Mountain],
+  ["elevation", Layers],
+  ["slope", TrendingUp],
+  ["aspect", Compass],
+] as const;
+
 export default function App() {
   const mapStageRef = useRef<HTMLElement | null>(null);
   const traceMenuRef = useRef<HTMLDivElement | null>(null);
@@ -105,6 +114,8 @@ export default function App() {
   const [topographicAvailability, setTopographicAvailability] = useState<TopographicAvailability>({
     hillshade: true,
     elevation: true,
+    slope: true,
+    aspect: true,
   });
   const [terrainCoverage, setTerrainCoverage] = useState<TerrainCoverage | null>(null);
   const [activePreparedTerrain, setActivePreparedTerrain] = useState<{
@@ -190,7 +201,15 @@ export default function App() {
   };
 
   const changeTopographicVisibility = (id: TopographicLayerId, visible: boolean) => {
-    setTopographicVisibility((current) => ({ ...current, [id]: visible }));
+    setTopographicVisibility((current) => {
+      const next = { ...current, [id]: visible };
+      if (visible && id !== "hillshade") {
+        (Object.keys(TOPOGRAPHIC_LAYERS) as TopographicLayerId[]).forEach((other) => {
+          if (other !== "hillshade" && other !== id) next[other] = false;
+        });
+      }
+      return next;
+    });
   };
 
   const changeTopographicOpacity = (id: TopographicLayerId, opacity: number) => {
@@ -209,7 +228,7 @@ export default function App() {
     const active = { elementId, result, geometryRevision: geometry.getRevision() };
     activePreparedTerrainRef.current = active;
     setActivePreparedTerrain(active);
-    const visible = { hillshade: true, elevation: true };
+    const visible = { hillshade: true, elevation: true, slope: false, aspect: false };
     topographicVisibilityRef.current = visible;
     setTopographicVisibility(visible);
   }, [drawingTools.layer, drawingTools.setTerrainFeatureId]);
@@ -243,6 +262,14 @@ export default function App() {
     void terrainJobs.prepareTerrain(elementId, areaName, bbox);
   }, [terrainJobs.prepareTerrain]);
 
+  const handlePrepareDerivatives = useCallback(async (elementId: string, jobId: string) => {
+    const result = await terrainJobs.prepareDerivatives(elementId, jobId);
+    if (!result) return;
+    if (activePreparedTerrainRef.current?.elementId === elementId) {
+      setActivePreparedTerrain((current) => current?.elementId === elementId ? { ...current, result } : current);
+    }
+  }, [terrainJobs.prepareDerivatives]);
+
   const showPreparedTerrain = useCallback((elementId: string) => {
     const job = terrainJobs.jobs[elementId];
     if (job?.state === "completed" && job.result) activatePreparedTerrain(elementId, job.result);
@@ -262,7 +289,7 @@ export default function App() {
     : "hidden";
   const detailedCoverageRatio = getTerrainCoverageRatio(mapExtent, terrainCoverage);
   const hasDetailedCoverageForView = detailedCoverageRatio >= TERRAIN_VISIBILITY_THRESHOLDS.detailedMinViewCoverageRatio;
-  const hasTopographicPreference = topographicVisibility.hillshade || topographicVisibility.elevation;
+  const hasTopographicPreference = Object.values(topographicVisibility).some(Boolean);
   const selectedVectorBaseMap = baseMap === "osm" || baseMap === "qgis" ? null : baseMap;
   const selectedVectorStatus = selectedVectorBaseMap ? openFreeMapStatus[selectedVectorBaseMap] : "idle";
   const selectedElement = drawingTools.selectedElementInfo;
@@ -282,6 +309,14 @@ export default function App() {
   const activeTerrainGeometry = activeTerrainFeature?.getGeometry();
   const activeTerrainClipGeometry = activeTerrainGeometry instanceof Polygon ? activeTerrainGeometry : null;
   const regionalElevationStyle = activePreparedTerrain?.result.coverage.elevation_style;
+  const regionalDerivatives = activePreparedTerrain?.result.derivatives;
+  const activeTerrainJob = activePreparedTerrain
+    ? terrainJobs.jobs[activePreparedTerrain.elementId]
+    : undefined;
+  const activeTerrainJobId = activeTerrainJob?.jobId;
+  const derivativeJobBusy = activeTerrainJob?.derivatives?.state === "submitting"
+    || activeTerrainJob?.derivatives?.state === "queued"
+    || activeTerrainJob?.derivatives?.state === "running";
   const regionalElevationGradient = regionalElevationStyle
     ? `linear-gradient(90deg, ${regionalElevationStyle.stops.map((stop) => (
       `${stop.color} ${(stop.position * 100).toFixed(2)}%`
@@ -305,10 +340,15 @@ export default function App() {
       const layer = layers[id];
       const source = layer.getSource();
       if (!source) return;
-      const shouldRender = !activePreparedTerrain && terrainServiceState === "available" && topographicVisibility[id] && terrainRenderMode !== "hidden";
+      const supportsGlobalLayer = id === "hillshade" || id === "elevation";
+      const shouldRender = supportsGlobalLayer && !activePreparedTerrain && terrainServiceState === "available" && topographicVisibility[id] && terrainRenderMode !== "hidden";
       if (shouldRender) {
         const names = TOPOGRAPHIC_LAYERS[id];
-        const requestedLayer = terrainRenderMode === "detailed" ? names.wmsLayer : names.globalWmsLayer;
+        const requestedLayer = terrainRenderMode === "detailed"
+          ? names.wmsLayer
+          : id === "hillshade"
+            ? TOPOGRAPHIC_LAYERS.hillshade.globalWmsLayer
+            : TOPOGRAPHIC_LAYERS.elevation.globalWmsLayer;
         if (source.getParams().LAYERS !== requestedLayer) source.updateParams({ LAYERS: requestedLayer });
       }
       if (layer.getVisible() !== shouldRender) layer.setVisible(shouldRender);
@@ -322,10 +362,11 @@ export default function App() {
       const layer = layers[id];
       const source = layer.getSource();
       if (!source) return;
-      if (activePreparedTerrain && activeTerrainClipGeometry) {
+      const requestedLayer = activePreparedTerrain?.result.cartography.layers[id];
+      if (activePreparedTerrain && activeTerrainClipGeometry && requestedLayer) {
         source.updateParams({
           MAP: activePreparedTerrain.result.cartography.map_parameter,
-          LAYERS: activePreparedTerrain.result.cartography.layers[id],
+          LAYERS: requestedLayer,
         });
         layer.setOpacity(topographicOpacity[id] / 100);
         if (layer.getVisible() !== topographicVisibility[id]) layer.setVisible(topographicVisibility[id]);
@@ -623,13 +664,38 @@ export default function App() {
                 </div>
               </div>
             )}
+            {activePreparedTerrain && !regionalDerivatives && (
+              <div className="terrain-derivative-preparation">
+                <p>Calcula pendientes y orientación desde el DEM de 30 m ya preparado. No vuelve a descargar la elevación.</p>
+                <Button
+                  variant="outline"
+                  size="small"
+                  className="terrain-derivative-button"
+                  disabled={!activeTerrainJobId || derivativeJobBusy}
+                  onClick={() => activeTerrainJobId && void handlePrepareDerivatives(activePreparedTerrain.elementId, activeTerrainJobId)}
+                >
+                  {derivativeJobBusy ? <LoaderCircle size={14} className="spinner" aria-hidden="true" /> : <TrendingUp size={14} aria-hidden="true" />}
+                  {derivativeJobBusy ? "Preparando capas…" : "Preparar pendientes y orientación"}
+                </Button>
+                <p
+                  className={activeTerrainJob?.derivatives?.state === "error" ? "terrain-derivative-status terrain-derivative-status--error" : "terrain-derivative-status"}
+                  role="status"
+                >
+                  {activeTerrainJob?.derivatives?.message ?? "Los productos numéricos se guardarán para futuros análisis."}
+                </p>
+              </div>
+            )}
             <div className="topographic-layer-list">
-              {([
-                ["hillshade", Mountain],
-                ["elevation", Layers],
-              ] as const).map(([id, Icon]) => {
+              {TOPOGRAPHIC_LAYER_OPTIONS.filter(([id]) => (
+                id === "hillshade" || id === "elevation" || Boolean(regionalDerivatives)
+              )).map(([id, Icon]) => {
                 const layer = TOPOGRAPHIC_LAYERS[id];
                 const opacityId = `topographic-opacity-${id}`;
+                const unitHint = id === "slope"
+                  ? "· porcentaje"
+                  : id === "aspect"
+                    ? "· grados desde norte de cuadrícula"
+                    : "";
                 return (
                   <div className="topographic-layer-card" key={id}>
                     <div className="overlay-layer-row topographic-layer-row">
@@ -640,7 +706,7 @@ export default function App() {
                         <span className="layer-title">{layer.title}</span>
                           <span className="layer-subtitle">
                             {activePreparedTerrain
-                              ? `${activePreparedTerrain.result.coverage.resolution_m} m · ${activePreparedTerrain.result.coverage.horizontal_crs}`
+                              ? `${activePreparedTerrain.result.coverage.resolution_m} m · ${activePreparedTerrain.result.coverage.horizontal_crs} ${unitHint}`
                               : layer.description}
                           </span>
                       </span>
@@ -673,6 +739,33 @@ export default function App() {
                 );
               })}
             </div>
+            {topographicVisibility.slope && regionalDerivatives && (
+              <div className="derivative-legend" aria-label="Leyenda de pendientes en porcentaje">
+                <span className="elevation-legend-title">Pendiente · porcentaje</span>
+                <div className="derivative-legend-grid">
+                  {regionalDerivatives.slope.legend.map((item) => (
+                    <span className="derivative-legend-item" key={item.value}>
+                      <i style={{ backgroundColor: item.color }} aria-hidden="true" />
+                      {item.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {topographicVisibility.aspect && regionalDerivatives && (
+              <div className="derivative-legend" aria-label="Leyenda de orientación de laderas">
+                <span className="elevation-legend-title">Orientación · {regionalDerivatives.aspect.north_reference_label}</span>
+                <div className="derivative-legend-grid derivative-legend-grid--aspect">
+                  {regionalDerivatives.aspect.legend.map((item) => (
+                    <span className="derivative-legend-item" key={item.direction} title={item.label}>
+                      <i style={{ backgroundColor: item.color }} aria-hidden="true" />
+                      {item.direction}
+                    </span>
+                  ))}
+                </div>
+                <span className="derivative-legend-note">Los píxeles planos se muestran como «sin orientación».</span>
+              </div>
+            )}
             {topographicVisibility.elevation && (
               (activePreparedTerrain || (terrainCoverage && terrainRenderMode !== "hidden"))
             ) && (

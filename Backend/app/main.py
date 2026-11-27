@@ -78,6 +78,10 @@ class TerrainJob:
     result: dict[str, Any] | None = None
     error: str | None = None
     reused: bool = False
+    derivatives_status: str = "idle"
+    derivatives_started_at: str | None = None
+    derivatives_completed_at: str | None = None
+    derivatives_error: str | None = None
 
 
 jobs: dict[str, TerrainJob] = {}
@@ -129,6 +133,29 @@ def result_is_ready(result: Any) -> bool:
         isinstance(files.get(key), str) and Path(files[key]).is_file()
         for key in ("project_file", "elevation_raster", "hillshade_raster")
     )
+
+
+def derivatives_are_ready(result: Any) -> bool:
+    if not isinstance(result, dict) or not isinstance(result.get("derivatives"), dict):
+        return False
+    files = result.get("storage", {})
+    return all(
+        isinstance(files.get(key), str) and Path(files[key]).is_file()
+        for key in ("slope_raster", "aspect_raster", "aspect_display_raster")
+    )
+
+
+def discard_broken_derivative_references(result: dict[str, Any]) -> bool:
+    if derivatives_are_ready(result):
+        return True
+    result.pop("derivatives", None)
+    storage = result.get("storage", {})
+    for key in ("slope_raster", "aspect_raster", "aspect_display_raster"):
+        storage.pop(key, None)
+    layers = result.get("cartography", {}).get("layers", {})
+    for key in ("slope", "aspect"):
+        layers.pop(key, None)
+    return False
 
 
 def make_cartography_reference(project_path: Path, script_result: dict[str, Any], reused: bool) -> dict[str, Any]:
@@ -200,6 +227,13 @@ def job_response(job: TerrainJob) -> dict[str, Any]:
         "reused": job.reused,
         "status_url": f"/api/terrain/jobs/{job.job_id}",
         "result_url": f"/api/terrain/jobs/{job.job_id}/result" if job.status == "completed" else None,
+        "derivatives": {
+            "status": job.derivatives_status,
+            "started_at": job.derivatives_started_at,
+            "completed_at": job.derivatives_completed_at,
+            "error": job.derivatives_error,
+            "result": job.result.get("derivatives") if derivatives_are_ready(job.result) else None,
+        },
     }
     if job.result is not None:
         body["result"] = job.result
@@ -225,6 +259,7 @@ def load_persisted_job(job_id: str) -> TerrainJob | None:
         if saved.get("job_id") != job_id or request_id_for(area_name, bbox) != job_id:
             return None
         result.setdefault("preparation", {})["reused"] = True
+        derivatives_status = "completed" if discard_broken_derivative_references(result) else "idle"
         return TerrainJob(
             job_id=job_id,
             area_name=area_name,
@@ -234,6 +269,7 @@ def load_persisted_job(job_id: str) -> TerrainJob | None:
             completed_at=saved.get("completed_at", datetime.now(timezone.utc).isoformat()),
             result=result,
             reused=True,
+            derivatives_status=derivatives_status,
         )
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return None
@@ -392,6 +428,107 @@ def refresh_cached_job_style(job: TerrainJob) -> None:
                 active_job_id = None
 
 
+def execute_derivative_job(job: TerrainJob) -> None:
+    """Add derived rasters to a completed region without rebuilding its DEM."""
+    global active_job_id
+    with jobs_lock:
+        job.derivatives_status = "running"
+        job.derivatives_started_at = datetime.now(timezone.utc).isoformat()
+        job.derivatives_completed_at = None
+        job.derivatives_error = None
+
+    try:
+        if job.result is None or not result_is_ready(job.result):
+            raise RuntimeError("The prepared elevation and regional project are not available.")
+        coverage = job.result["coverage"]
+        storage = job.result["storage"]
+        command = [
+            "/usr/bin/python3",
+            str(SCRIPT_PATH),
+            "--derive-slope-aspect",
+            "--elevation-path",
+            storage["elevation_raster"],
+            "--horizontal-crs",
+            coverage["horizontal_crs"],
+            "--bbox",
+            ",".join(f"{value:.8f}" for value in coverage["extent_wgs84"]),
+            "--name",
+            coverage["area_name"],
+            "--project-path",
+            storage["project_file"],
+        ]
+        environment = os.environ.copy()
+        environment.update({"QGIS_PREFIX_PATH": "/usr", "QT_QPA_PLATFORM": "offscreen", "PYTHONUNBUFFERED": "1"})
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=environment,
+            timeout=JOB_TIMEOUT_SECONDS,
+        )
+        if completed.returncode != 0:
+            diagnostic = (completed.stderr or completed.stdout or "Terrain derivative processing failed.").strip()
+            raise RuntimeError(diagnostic[-3000:])
+        result_line = next(
+            (
+                line.removeprefix("DERIVATIVE_RESULT_JSON=")
+                for line in reversed(completed.stdout.splitlines())
+                if line.startswith("DERIVATIVE_RESULT_JSON=")
+            ),
+            None,
+        )
+        if not result_line:
+            raise RuntimeError("Terrain derivative processing finished without result metadata.")
+        derived = json.loads(result_line)
+        metadata = derived["metadata"]
+        if metadata.get("algorithm") != "Horn" or metadata.get("horizontal_crs") != coverage["horizontal_crs"]:
+            raise RuntimeError("Terrain derivative metadata does not match the prepared region.")
+        if metadata.get("resolution_m") != coverage["resolution_m"]:
+            raise RuntimeError("Terrain derivative resolution does not match the prepared elevation.")
+        derivative_paths = {
+            "slope_raster": derived["slope_path"],
+            "aspect_raster": derived["aspect_path"],
+            "aspect_display_raster": derived["aspect_display_path"],
+        }
+        if not all(Path(path).is_file() for path in derivative_paths.values()):
+            raise RuntimeError("Terrain derivative processing did not produce all three raster products.")
+
+        with jobs_lock:
+            job.result["storage"].update(derivative_paths)
+            job.result["cartography"]["layers"].update({
+                "slope": metadata["slope"]["wms_layer"],
+                "aspect": metadata["aspect"]["wms_layer"],
+            })
+            job.result["derivatives"] = metadata
+            job.result.setdefault("preparation", {})["derivatives_reused"] = bool(derived.get("reused"))
+            job.derivatives_status = "completed"
+            job.derivatives_completed_at = datetime.now(timezone.utc).isoformat()
+            job.derivatives_error = None
+            write_persisted_job(job)
+    except subprocess.TimeoutExpired:
+        with jobs_lock:
+            job.derivatives_status = "failed"
+            job.derivatives_completed_at = datetime.now(timezone.utc).isoformat()
+            job.derivatives_error = (
+                f"Terrain derivative processing exceeded the {JOB_TIMEOUT_SECONDS // 60}-minute time limit. "
+                "The prepared elevation and hillshade remain available."
+            )
+            write_persisted_job(job)
+    except Exception as error:  # Preserve the completed base terrain on derivative failures.
+        with jobs_lock:
+            job.derivatives_status = "failed"
+            job.derivatives_completed_at = datetime.now(timezone.utc).isoformat()
+            job.derivatives_error = f"{str(error)[:2800]} The prepared elevation and hillshade remain available."
+            write_persisted_job(job)
+    finally:
+        with jobs_lock:
+            if active_job_id == job.job_id:
+                active_job_id = None
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     if not REGION_ROOT.is_dir() or not os.access(REGION_ROOT, os.W_OK):
@@ -455,6 +592,49 @@ def create_terrain_job(request: TerrainPreparationRequest) -> JSONResponse:
         jobs[job_id] = job
         active_job_id = job_id
         executor.submit(execute_job, job)
+        return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=job_response(job))
+
+
+@app.post("/api/terrain/jobs/{job_id}/derivatives")
+def create_terrain_derivatives_job(job_id: str) -> JSONResponse:
+    """Generate slope/aspect from an existing region's stored elevation raster."""
+    global active_job_id
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if job is None:
+            job = load_persisted_job(job_id)
+            if job is not None:
+                jobs[job_id] = job
+        if job is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="terrain job not found")
+        if job.status != "completed" or not result_is_ready(job.result):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="the base terrain must finish preparing before derivatives can be generated",
+            )
+        if derivatives_are_ready(job.result):
+            job.derivatives_status = "completed"
+            job.derivatives_error = None
+            job.result["derivatives"]["reused"] = True
+            job.result.setdefault("preparation", {})["derivatives_reused"] = True
+            write_persisted_job(job)
+            return JSONResponse(status_code=status.HTTP_200_OK, content=job_response(job))
+        if job.derivatives_status in {"queued", "running"}:
+            return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=job_response(job))
+        if active_job_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"message": "Only one terrain processing job can run at a time.", "active_job_id": active_job_id},
+            )
+        if not SCRIPT_PATH.is_file():
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="terrain processing script is unavailable")
+
+        job.derivatives_status = "queued"
+        job.derivatives_started_at = None
+        job.derivatives_completed_at = None
+        job.derivatives_error = None
+        active_job_id = job_id
+        executor.submit(execute_derivative_job, job)
         return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=job_response(job))
 
 
