@@ -59,7 +59,16 @@ import {
 import type { TerrainPreparationResult, TerrainPreparationView } from "@/lib/terrain-preparation";
 import {
   EXPLORATION_TERRAIN,
-  initialExplorationTerrainEnabled,
+  ABSOLUTE_ELEVATION_MAX_M,
+  ABSOLUTE_ELEVATION_MIN_M,
+  ABSOLUTE_ELEVATION_STOPS,
+  ADAPTIVE_LAND_STOPS,
+  absoluteElevationScale,
+  initialExplorationElevationEnabled,
+  initialExplorationElevationMode,
+  initialExplorationHillshadeEnabled,
+  type ExplorationElevationMode,
+  type ExplorationElevationScale,
   type ExplorationTerrainStatus,
 } from "@/lib/exploration-terrain";
 import {
@@ -95,12 +104,12 @@ const TOPOGRAPHIC_LAYER_OPTIONS = [
 ] as const;
 
 function explorationTerrainStatusMessage(status: ExplorationTerrainStatus, zoom: number): string {
-  if (status === "disabled") return "Relieve de exploración desactivado.";
+  if (status === "disabled") return "Relieve y elevación de exploración desactivados.";
   if (status === "scale") return `Disponible al acercar a zoom ${EXPLORATION_TERRAIN.minZoom}. No se solicitan teselas por debajo de esa escala.`;
   if (status === "loading") return "Cargando teselas de relieve para esta vista…";
-  if (status === "active") return "Relieve de exploración activo.";
+  if (status === "active") return "Topografía de exploración activa.";
   if (status === "overzoom") return `Activo hasta zoom ${EXPLORATION_TERRAIN.maxDataZoom}; ampliar más no añade detalle del terreno.`;
-  if (status === "regional-priority") return "En pausa mientras se muestra el relieve detallado de un área.";
+  if (status === "regional-priority") return "En pausa mientras se muestra topografía de un área preparada.";
   if (status === "unavailable") return "WebGL no está disponible; el mapa base y las herramientas siguen funcionando.";
   if (status === "error") return "No se pudieron cargar algunas teselas; el mapa base sigue disponible.";
   return `Zoom actual ${zoom.toLocaleString("es-ES", { maximumFractionDigits: 1 })}.`;
@@ -144,8 +153,14 @@ export default function App() {
     aspect: true,
   });
   const [terrainCoverage, setTerrainCoverage] = useState<TerrainCoverage | null>(null);
-  const [explorationTerrainEnabled, setExplorationTerrainEnabled] = useState(initialExplorationTerrainEnabled);
-  const [explorationTerrainOpacity, setExplorationTerrainOpacity] = useState<number>(EXPLORATION_TERRAIN.defaultOpacity);
+  const [explorationTerrainEnabled, setExplorationTerrainEnabled] = useState(initialExplorationHillshadeEnabled);
+  const [explorationElevationEnabled, setExplorationElevationEnabled] = useState(initialExplorationElevationEnabled);
+  const [explorationElevationMode, setExplorationElevationMode] = useState<ExplorationElevationMode>(initialExplorationElevationMode);
+  const [explorationTerrainOpacity, setExplorationTerrainOpacity] = useState<number>(EXPLORATION_TERRAIN.defaultHillshadeOpacity);
+  const [explorationElevationOpacity, setExplorationElevationOpacity] = useState<number>(EXPLORATION_TERRAIN.defaultElevationOpacity);
+  const [explorationElevationScale, setExplorationElevationScale] = useState<ExplorationElevationScale>(
+    () => absoluteElevationScale(initialExplorationElevationMode()),
+  );
   const [explorationTerrainVisible, setExplorationTerrainVisible] = useState(false);
   const [explorationTerrainStatus, setExplorationTerrainStatus] = useState<ExplorationTerrainStatus>("loading");
   const [preparedTerrains, setPreparedTerrains] = useState<Record<string, PreparedTerrainState>>({});
@@ -246,9 +261,27 @@ export default function App() {
   const changeExplorationTerrainEnabled = (enabled: boolean) => {
     setExplorationTerrainEnabled(enabled);
     try {
-      window.localStorage.setItem(EXPLORATION_TERRAIN.storageKey, String(enabled));
+      window.localStorage.setItem(EXPLORATION_TERRAIN.hillshadeStorageKey, String(enabled));
     } catch {
       // The preference remains active for this page if storage is unavailable.
+    }
+  };
+
+  const changeExplorationElevationEnabled = (enabled: boolean) => {
+    setExplorationElevationEnabled(enabled);
+    try {
+      window.localStorage.setItem(EXPLORATION_TERRAIN.elevationStorageKey, String(enabled));
+    } catch {
+      // Keep this session's preference if browser storage is unavailable.
+    }
+  };
+
+  const changeExplorationElevationMode = (mode: ExplorationElevationMode) => {
+    setExplorationElevationMode(mode);
+    try {
+      window.localStorage.setItem(EXPLORATION_TERRAIN.elevationModeStorageKey, mode);
+    } catch {
+      // Keep this session's preference if browser storage is unavailable.
     }
   };
 
@@ -258,6 +291,16 @@ export default function App() {
 
   const handleExplorationTerrainVisibilityChange = useCallback((visible: boolean) => {
     setExplorationTerrainVisible((current) => current === visible ? current : visible);
+  }, []);
+
+  const handleExplorationElevationScaleChange = useCallback((scale: ExplorationElevationScale) => {
+    setExplorationElevationScale((current) => current.requestedMode === scale.requestedMode
+      && current.effectiveMode === scale.effectiveMode
+      && current.minM === scale.minM
+      && current.maxM === scale.maxM
+      && current.sampleCount === scale.sampleCount
+      ? current
+      : scale);
   }, []);
 
   const activatePreparedTerrain = useCallback((elementId: string, jobId: string, result: TerrainPreparationResult) => {
@@ -403,12 +446,28 @@ export default function App() {
   ));
   const suppressGlobalHillshade = explorationTerrainVisible || hasVisibleRegionalHillshade;
   const explorationStatusMessage = explorationTerrainStatusMessage(explorationTerrainStatus, mapZoom);
+  const formatElevation = (value: number) => Math.round(value).toLocaleString("es-ES");
+  const absoluteExplorationGradient = `linear-gradient(90deg, ${ABSOLUTE_ELEVATION_STOPS.map((stop) => (
+    `${stop.color} ${(((stop.valueM - ABSOLUTE_ELEVATION_MIN_M) / (ABSOLUTE_ELEVATION_MAX_M - ABSOLUTE_ELEVATION_MIN_M)) * 100).toFixed(2)}%`
+  )).join(", ")})`;
+  const oceanExplorationGradient = `linear-gradient(90deg, ${ABSOLUTE_ELEVATION_STOPS.filter((stop) => stop.valueM <= 0).map((stop) => (
+    `${stop.color} ${(((stop.valueM - ABSOLUTE_ELEVATION_MIN_M) / (0 - ABSOLUTE_ELEVATION_MIN_M)) * 100).toFixed(2)}%`
+  )).join(", ")})`;
+  const adaptiveLandGradient = `linear-gradient(90deg, ${ADAPTIVE_LAND_STOPS.map((stop) => (
+    `${stop.color} ${(stop.position * 100).toFixed(2)}%`
+  )).join(", ")})`;
+  const adaptiveScaleFallback = explorationElevationScale.requestedMode === "adaptive"
+    && explorationElevationScale.effectiveMode !== "adaptive";
+  const explorationScaleMessage = explorationElevationScale.requestedMode === "absolute"
+    ? "Escala absoluta; los colores son comparables entre regiones."
+    : adaptiveScaleFallback
+      ? "Muestra terrestre insuficiente en esta vista; se usa temporalmente la escala absoluta."
+      : `Escala adaptativa regional: ${formatElevation(explorationElevationScale.minM)}–${formatElevation(explorationElevationScale.maxM)} m (${explorationElevationScale.sampleCount.toLocaleString("es-ES")} muestras). Los mismos colores representan rangos distintos en otras regiones.`;
   const regionalElevationGradient = regionalElevationStyle
     ? `linear-gradient(90deg, ${regionalElevationStyle.stops.map((stop) => (
       `${stop.color} ${(stop.position * 100).toFixed(2)}%`
     )).join(", ")})`
     : undefined;
-  const formatElevation = (value: number) => Math.round(value).toLocaleString("es-ES");
 
   useEffect(() => {
     drawingTools.setPreparedTerrainIds(preparedTerrainEntries.map((terrain) => terrain.elementId));
@@ -763,36 +822,101 @@ export default function App() {
             <summary className="panel-group-summary"><span className="eyebrow" id="topography-title">TOPOGRAFÍA</span></summary>
             <details className="terrain-exploration-controls" open>
               <summary>Topografía del mapa</summary>
-              <p className="overlay-intro">Relieve sombreado para recorrer el territorio sin preparar un área.</p>
+              <p className="overlay-intro">Elevación y sombreado para explorar sin preparar un área.</p>
               <div className="overlay-layer-row topographic-layer-row exploration-terrain-row">
                 <span className="overlay-symbol topographic-symbol topographic-symbol--hillshade" aria-hidden="true"><Mountain size={16} /></span>
                 <span className="layer-copy">
-                  <span className="layer-title">Relieve de exploración</span>
-                  <span className="layer-subtitle">Mapzen Terrain Tiles · hasta zoom {EXPLORATION_TERRAIN.maxDataZoom}</span>
+                  <span className="layer-title">Relieve sombreado</span>
+                  <span className="layer-subtitle">Resalta las formas del terreno</span>
                 </span>
                 <Switch
                   checked={explorationTerrainEnabled}
                   onCheckedChange={changeExplorationTerrainEnabled}
-                  aria-label={`${explorationTerrainEnabled ? "Desactivar" : "Activar"} relieve de exploración`}
+                  aria-label={`${explorationTerrainEnabled ? "Desactivar" : "Activar"} relieve sombreado`}
                 />
               </div>
-              <p className={`exploration-terrain-status exploration-terrain-status--${explorationTerrainStatus}`} role="status">{explorationStatusMessage}</p>
               {explorationTerrainEnabled && (
-                <label className="topographic-opacity exploration-terrain-opacity" htmlFor="exploration-relief-opacity">
-                  <span>Opacidad</span><output htmlFor="exploration-relief-opacity">{explorationTerrainOpacity} %</output>
+                <label className="topographic-opacity exploration-terrain-opacity" htmlFor="exploration-hillshade-opacity">
+                  <span>Intensidad del sombreado</span><output htmlFor="exploration-hillshade-opacity">{explorationTerrainOpacity} %</output>
                   <input
-                    id="exploration-relief-opacity"
+                    id="exploration-hillshade-opacity"
                     type="range"
-                    min="10"
-                    max="60"
+                    min="0"
+                    max="75"
                     step="5"
                     value={explorationTerrainOpacity}
                     onChange={(event) => setExplorationTerrainOpacity(Number(event.currentTarget.value))}
-                    aria-label="Opacidad del relieve de exploración"
+                    aria-label="Intensidad del relieve sombreado"
                   />
                 </label>
               )}
-              <p className="terrain-coverage-note">Visualización orientativa; no se usa para cálculos ni criterios.</p>
+              <div className="overlay-layer-row topographic-layer-row exploration-terrain-row exploration-elevation-row">
+                <span className="overlay-symbol topographic-symbol topographic-symbol--elevation" aria-hidden="true"><Layers size={16} /></span>
+                <span className="layer-copy">
+                  <span className="layer-title">Elevación del terreno</span>
+                  <span className="layer-subtitle">Colores hipsométricos · metros</span>
+                </span>
+                <Switch
+                  checked={explorationElevationEnabled}
+                  onCheckedChange={changeExplorationElevationEnabled}
+                  aria-label={`${explorationElevationEnabled ? "Desactivar" : "Activar"} elevación del terreno`}
+                />
+              </div>
+              {explorationElevationEnabled && (
+                <>
+                  <label className="topographic-opacity exploration-terrain-opacity" htmlFor="exploration-elevation-opacity">
+                    <span>Opacidad de elevación</span><output htmlFor="exploration-elevation-opacity">{explorationElevationOpacity} %</output>
+                    <input
+                      id="exploration-elevation-opacity"
+                      type="range"
+                      min="0"
+                      max="80"
+                      step="5"
+                      value={explorationElevationOpacity}
+                      onChange={(event) => setExplorationElevationOpacity(Number(event.currentTarget.value))}
+                      aria-label="Opacidad de elevación"
+                    />
+                  </label>
+                  <label className="exploration-elevation-mode" htmlFor="exploration-elevation-mode">
+                    <span>Escala de color</span>
+                    <select
+                      id="exploration-elevation-mode"
+                      value={explorationElevationMode}
+                      onChange={(event) => changeExplorationElevationMode(event.currentTarget.value as ExplorationElevationMode)}
+                    >
+                      <option value="adaptive">Adaptativa regional</option>
+                      <option value="absolute">Absoluta · comparable</option>
+                    </select>
+                  </label>
+                  {explorationElevationScale.effectiveMode === "adaptive" ? (
+                    <div className="exploration-elevation-legend" aria-label="Leyenda de elevación adaptativa en metros">
+                      <span className="elevation-legend-title">Elevación del mapa · m</span>
+                      <div className="exploration-elevation-legend__bands">
+                        <div className="exploration-elevation-legend__band">
+                          <span>Océano · escala fija</span>
+                          <i style={{ background: oceanExplorationGradient }} aria-hidden="true" />
+                          <div className="exploration-elevation-legend__values"><span>−11 000</span><span>0 m</span></div>
+                        </div>
+                        <div className="exploration-elevation-legend__band">
+                          <span>Terreno · escala adaptativa</span>
+                          <i style={{ background: adaptiveLandGradient }} aria-hidden="true" />
+                          <div className="exploration-elevation-legend__values"><span>{formatElevation(explorationElevationScale.minM)} m</span><span>{formatElevation((explorationElevationScale.minM + explorationElevationScale.maxM) / 2)} m</span><span>{formatElevation(explorationElevationScale.maxM)} m</span></div>
+                        </div>
+                      </div>
+                      <span className="elevation-legend-note">{explorationScaleMessage}</span>
+                    </div>
+                  ) : (
+                    <div className="exploration-elevation-legend" aria-label="Leyenda de elevación absoluta en metros">
+                      <span className="elevation-legend-title">Elevación y profundidad · m</span>
+                      <i className="exploration-elevation-legend__absolute" style={{ background: absoluteExplorationGradient }} aria-hidden="true" />
+                      <div className="exploration-elevation-legend__values"><span>{formatElevation(ABSOLUTE_ELEVATION_MIN_M)} m</span><span>0 m</span><span>{formatElevation(ABSOLUTE_ELEVATION_MAX_M)} m</span></div>
+                      <span className={`elevation-legend-note${adaptiveScaleFallback ? " exploration-elevation-legend__fallback" : ""}`}>{explorationScaleMessage}</span>
+                    </div>
+                  )}
+                </>
+              )}
+              <p className={`exploration-terrain-status exploration-terrain-status--${explorationTerrainStatus}`} role="status">{explorationStatusMessage}</p>
+              <p className="terrain-coverage-note">Mapzen Terrain Tiles · hasta zoom {EXPLORATION_TERRAIN.maxDataZoom}. Visualización orientativa; no sirve para cálculos.</p>
             </details>
 
             <div className="terrain-area-heading"><span className="eyebrow">TOPOGRAFÍA DE ÁREAS</span></div>
@@ -1005,6 +1129,10 @@ export default function App() {
             preparedTerrains={preparedTerrainEntries}
             explorationTerrainEnabled={explorationTerrainEnabled}
             explorationTerrainOpacity={explorationTerrainOpacity}
+            explorationElevationEnabled={explorationElevationEnabled}
+            explorationElevationOpacity={explorationElevationOpacity}
+            explorationElevationMode={explorationElevationMode}
+            explorationElevationScale={explorationElevationScale}
             regionalHillshadeVisible={hasVisibleRegionalHillshade}
             onStatusChange={handleMapStatus}
             onQgisStatusChange={handleQgisStatusChange}
@@ -1013,6 +1141,7 @@ export default function App() {
             onTopographicAvailabilityChange={handleTopographicAvailabilityChange}
             onExplorationTerrainStatusChange={handleExplorationTerrainStatusChange}
             onExplorationTerrainVisibilityChange={handleExplorationTerrainVisibilityChange}
+            onExplorationElevationScaleChange={handleExplorationElevationScaleChange}
             onPreparedTerrainAvailabilityChange={handlePreparedTerrainAvailabilityChange}
             onMapReady={drawingTools.connectMap}
             onCenterChange={handleMapCenterChange}
