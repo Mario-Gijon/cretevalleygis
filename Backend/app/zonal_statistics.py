@@ -80,6 +80,14 @@ def _polygon_area_m2(geometry_wgs84: ogr.Geometry) -> float:
     return float(area)
 
 
+def geometry_bbox_wgs84(geojson_geometry: dict[str, Any]) -> tuple[float, float, float, float]:
+    """Validate a WGS84 polygon and return its west/south/east/north extent."""
+    geometry = _make_wgs84_geometry(geojson_geometry)
+    _polygon_area_m2(geometry)
+    min_x, max_x, min_y, max_y = geometry.GetEnvelope()
+    return float(min_x), float(min_y), float(max_x), float(max_y)
+
+
 def _open_raster(path: str | Path, label: str) -> gdal.Dataset:
     raster_path = Path(path)
     if not raster_path.is_file():

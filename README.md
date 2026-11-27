@@ -170,3 +170,82 @@ docker compose exec backend /opt/backend-venv/bin/python -m app.zonal_statistics
 ```
 
 El JSON se escribe en stdout y puede guardarse redirigiendo la salida. Este motor es una primera utilidad local de análisis: no crea endpoints, no prepara datos automáticamente y no sustituye la validación de criterios posteriores.
+
+## API de análisis automático de áreas
+
+El backend expone `POST /api/analysis/jobs`, `GET /api/analysis/jobs/{id}` y `GET /api/analysis/jobs/{id}/result`. El POST recibe el nombre del área y una geometría GeoJSON `Polygon` o `MultiPolygon` en WGS84; no acepta rutas de archivos ni identificadores de terrenos. Antes de encolar, valida la geometría y aplica los límites actuales de extensión, teselas Copernicus y píxeles. El trabajo comprueba primero regiones compatibles ya preparadas; si faltan elevaciones las prepara con el proceso existente y genera derivados numéricos cuando sea necesario. Finalmente calcula las estadísticas sobre la geometría original, no sobre su rectángulo delimitador.
+
+Los trabajos comparten el ejecutor único del backend con las tareas existentes de preparación y derivados. Los estados son `queued`, `checking_data`, `preparing_elevation`, `generating_derivatives`, `calculating_statistics`, `completed` y `failed`; el campo `stage` contiene una etiqueta legible y no se inventa un porcentaje de progreso. Un resultado sin píxeles válidos se completa con estados `no_data` y valores estadísticos nulos. Los errores técnicos usan mensajes públicos genéricos y no exponen rutas ni trazas.
+
+La API responde `422` para solicitudes geométricas inválidas o límites excedidos y para consultar el resultado de un trabajo fallido, `409` si el trabajador está ocupado y `404` para identificadores inexistentes o resultados cuyos datos ya no están disponibles.
+
+Ejemplo de solicitud:
+
+```http
+POST /api/analysis/jobs
+Content-Type: application/json
+
+{
+  "area_name": "Jaén auto derivatives",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [[
+      [-4.235, 37.762], [-4.19, 37.762], [-4.19, 37.799],
+      [-4.235, 37.799], [-4.235, 37.762]
+    ]]
+  }
+}
+```
+
+Respuesta inicial (`202 Accepted`):
+
+```json
+{
+  "analysis_id": "725bfdc2d4d33eca",
+  "status": "queued",
+  "stage": "Pendiente",
+  "area_name": "Jaén auto derivatives",
+  "status_url": "/api/analysis/jobs/725bfdc2d4d33eca",
+  "result_url": null
+}
+```
+
+Consulta `status_url` hasta `completed` y después solicita `result_url` (`200 OK`):
+
+Fragmento abreviado de una respuesta real:
+
+```json
+{
+  "analysis_id": "725bfdc2d4d33eca",
+  "status": "completed",
+  "data_status": "available",
+  "area_name": "Jaén auto derivatives",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [[[-4.235, 37.762], [-4.19, 37.762], [-4.19, 37.799], [-4.235, 37.799], [-4.235, 37.762]]]
+  },
+  "source": "Copernicus DEM GLO-30 Public",
+  "resolution_m": 30,
+  "terrain_reused": true,
+  "derivatives_reused": false,
+  "result": {
+    "schema_version": "1.0",
+    "elevation": {
+      "status": "available", "unit": "m",
+      "statistics": { "minimum": 266.354492, "mean": 342.04315 },
+      "warnings": []
+    },
+    "slope": {
+      "status": "available", "unit": "%",
+      "statistics": { "minimum": 0.024456, "mean": 12.558063 },
+      "distribution": { "denominator_pixel_count": 18079 }, "warnings": []
+    },
+    "aspect": {
+      "status": "available", "unit": "degrees", "statistics": null,
+      "distribution": { "denominator_pixel_count": 18079 }, "warnings": []
+    }
+  }
+}
+```
+
+El resultado incluye la geometría original, versión del esquema, cobertura, unidades, distribuciones, advertencias y estadísticas completas. Una solicitud equivalente completada se reutiliza cuando coinciden la versión analítica, los productos numéricos y sus huellas de archivo; dos geometrías distintas mantienen identidades y resultados separados aunque compartan el mismo bbox. Los resultados completados se guardan atómicamente bajo `/io/data/terrain/analyses` en el volumen persistente; las rutas internas de los rásteres se conservan solo en ese archivo y no se devuelven por la API.
