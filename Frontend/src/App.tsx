@@ -23,7 +23,8 @@ import {
 import { fromLonLat, transformExtent } from "ol/proj.js";
 import Polygon from "ol/geom/Polygon.js";
 import type OlMap from "ol/Map.js";
-import MapView, { type BaseMapId, type BaseMapLayers, type MapStatus, type QgisStatus } from "@/components/MapView";
+import MapView, { type BaseMapLayers, type MapStatus, type QgisStatus } from "@/components/MapView";
+import { OPEN_FREE_MAP_STYLES, type BaseMapId, type OpenFreeMapId, type OpenFreeMapStatus } from "@/lib/base-maps";
 import { DrawnElementsList } from "@/components/DrawnElementsList";
 import { GeometryDetails } from "@/components/GeometryDetails";
 import { DrawingToolbar } from "@/components/DrawingToolbar";
@@ -65,6 +66,14 @@ function initialTheme(): ThemeMode {
   }
 }
 
+const BASE_MAP_OPTIONS: Array<{ id: BaseMapId; title: string; description: string }> = [
+  { id: "positron", title: "Minimalista", description: "Fondo claro y limpio" },
+  { id: "dark", title: "Oscuro", description: "Contraste nocturno" },
+  { id: "liberty", title: "Detallado", description: "Calles y lugares" },
+  { id: "osm", title: "OpenStreetMap", description: "Calles y lugares" },
+  { id: "qgis", title: "Crete Valley GIS", description: "Cartografía propia · Natural Earth" },
+];
+
 export default function App() {
   const mapStageRef = useRef<HTMLElement | null>(null);
   const traceMenuRef = useRef<HTMLDivElement | null>(null);
@@ -76,7 +85,14 @@ export default function App() {
   const [panelOpen, setPanelOpen] = useState(
     () => !window.matchMedia("(max-width: 720px)").matches,
   );
-  const [baseMap, setBaseMap] = useState<BaseMapId>("osm");
+  const [baseMap, setBaseMap] = useState<BaseMapId>("positron");
+  const baseMapRef = useRef<BaseMapId>(baseMap);
+  const [openFreeMapStatus, setOpenFreeMapStatus] = useState<Record<OpenFreeMapId, OpenFreeMapStatus>>({
+    positron: "idle",
+    dark: "idle",
+    liberty: "idle",
+  });
+  const [baseMapNotice, setBaseMapNotice] = useState<string | null>(null);
   const [overlayVisibility, setOverlayVisibility] = useState<GeographicOverlayVisibility>(DEFAULT_OVERLAY_VISIBILITY);
   const [overlayAvailability, setOverlayAvailability] = useState<Record<GeographicOverlayId, boolean>>({
     boundaries: true,
@@ -113,6 +129,7 @@ export default function App() {
 
   activePreparedTerrainRef.current = activePreparedTerrain;
   topographicVisibilityRef.current = topographicVisibility;
+  baseMapRef.current = baseMap;
 
   const handleMapStatus = useCallback((status: MapStatus) => {
     setMapStatus(status);
@@ -131,9 +148,23 @@ export default function App() {
   const handleQgisStatusChange = useCallback((status: QgisStatus) => {
     setQgisStatus(status);
     if (status !== "error") return;
-    baseLayersRef.current?.qgis.setVisible(false);
-    baseLayersRef.current?.osm.setVisible(true);
-    setBaseMap("osm");
+    if (baseMapRef.current === "qgis") {
+      baseMapRef.current = "osm";
+      setBaseMap("osm");
+    }
+  }, []);
+
+  const handleOpenFreeMapStatusChange = useCallback((id: OpenFreeMapId, status: OpenFreeMapStatus) => {
+    setOpenFreeMapStatus((current) => ({ ...current, [id]: status }));
+    if (status === "error") {
+      setBaseMapNotice("No se pudo cargar el mapa vectorial. OpenStreetMap sigue disponible.");
+      if (baseMapRef.current === id) {
+        baseMapRef.current = "osm";
+        setBaseMap("osm");
+      }
+    } else if (status === "available" && baseMapRef.current === id) {
+      setBaseMapNotice(null);
+    }
   }, []);
 
   const changeTheme = () => {
@@ -147,8 +178,8 @@ export default function App() {
   };
 
   const changeBaseMap = (next: BaseMapId) => {
-    baseLayersRef.current?.osm.setVisible(next === "osm");
-    baseLayersRef.current?.qgis.setVisible(next === "qgis");
+    baseMapRef.current = next;
+    setBaseMapNotice(null);
     setBaseMap(next);
     if (next === "qgis") setQgisStatus("loading");
   };
@@ -232,6 +263,8 @@ export default function App() {
   const detailedCoverageRatio = getTerrainCoverageRatio(mapExtent, terrainCoverage);
   const hasDetailedCoverageForView = detailedCoverageRatio >= TERRAIN_VISIBILITY_THRESHOLDS.detailedMinViewCoverageRatio;
   const hasTopographicPreference = topographicVisibility.hillshade || topographicVisibility.elevation;
+  const selectedVectorBaseMap = baseMap === "osm" || baseMap === "qgis" ? null : baseMap;
+  const selectedVectorStatus = selectedVectorBaseMap ? openFreeMapStatus[selectedVectorBaseMap] : "idle";
   const selectedElement = drawingTools.selectedElementInfo;
   const selectedTerrainJob = selectedElement ? terrainJobs.jobs[selectedElement.id] : undefined;
   const selectedTerrainMatches = Boolean(
@@ -499,36 +532,38 @@ export default function App() {
           <section className="layer-section" aria-labelledby="base-layers-title">
             <h2 className="eyebrow" id="base-layers-title">CAPA BASE</h2>
             <div className="base-map-options" role="radiogroup" aria-label="Mapa base">
-              <button
-                type="button"
-                className="base-map-option"
-                role="radio"
-                aria-checked={baseMap === "osm"}
-                onClick={() => changeBaseMap("osm")}
-              >
-                <span className="layer-symbol" aria-hidden="true"><Map size={18} /></span>
-                <span className="layer-copy">
-                  <span className="layer-title">OpenStreetMap</span>
-                  <span className="layer-subtitle">Calles y lugares</span>
-                </span>
-                <span className={`base-map-indicator ${baseMap === "osm" ? "base-map-indicator--active" : ""}`} aria-hidden="true" />
-              </button>
-              <button
-                type="button"
-                className="base-map-option"
-                role="radio"
-                aria-checked={baseMap === "qgis"}
-                onClick={() => changeBaseMap("qgis")}
-              >
-                <span className="layer-symbol" aria-hidden="true"><Layers size={18} /></span>
-                <span className="layer-copy">
-                  <span className="layer-title">Crete Valley GIS</span>
-                  <span className="layer-subtitle">
-                    {qgisStatus === "available" ? "Cartografía propia · Natural Earth" : qgisStatus === "error" ? "Servicio no disponible" : "Mapa mundial · Natural Earth"}
-                  </span>
-                </span>
-                <span className={`base-map-indicator ${baseMap === "qgis" ? "base-map-indicator--active" : ""}`} aria-hidden="true" />
-              </button>
+              {BASE_MAP_OPTIONS.map((option) => {
+                const vectorId = option.id === "osm" || option.id === "qgis" ? null : option.id;
+                const vectorStatus = vectorId ? openFreeMapStatus[vectorId] : "idle";
+                const subtitle = vectorStatus === "loading"
+                  ? "Cargando estilo…"
+                  : vectorStatus === "error"
+                    ? "No disponible · OpenStreetMap activo"
+                    : option.id === "qgis" && qgisStatus === "error"
+                      ? "Servicio no disponible"
+                      : option.description;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={`base-map-option base-map-option--${option.id}`}
+                    role="radio"
+                    aria-checked={baseMap === option.id}
+                    onClick={() => changeBaseMap(option.id)}
+                  >
+                    <span className={`base-map-preview base-map-preview--${option.id}`} aria-hidden="true" />
+                    <span className="layer-copy">
+                      <span className="layer-title">{option.title}</span>
+                      <span className="layer-subtitle">{subtitle}</span>
+                    </span>
+                    {baseMap === option.id && vectorStatus === "loading" ? (
+                      <LoaderCircle className="base-map-loading spinner" size={13} aria-label="Cargando mapa base" />
+                    ) : (
+                      <span className={`base-map-indicator ${baseMap === option.id ? "base-map-indicator--active" : ""}`} aria-hidden="true" />
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </section>
 
@@ -736,13 +771,23 @@ export default function App() {
           <div className="panel-spacer" />
           <div className="panel-attribution">
             <span>Fuente cartográfica</span>
-            <a
-              href={baseMap === "osm" ? "https://www.openstreetmap.org/copyright" : "https://www.naturalearthdata.com/about/terms-of-use/"}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {baseMap === "osm" ? "© OpenStreetMap contributors" : "Made with Natural Earth"}
-            </a>
+            {baseMap === "osm" ? (
+              <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">
+                © OpenStreetMap contributors
+              </a>
+            ) : baseMap === "qgis" ? (
+              <a href="https://www.naturalearthdata.com/about/terms-of-use/" target="_blank" rel="noreferrer">
+                Made with Natural Earth
+              </a>
+            ) : (
+              <>
+                <a href="https://openfreemap.org/" target="_blank" rel="noreferrer">OpenFreeMap</a>
+                <a href="https://openmaptiles.org/" target="_blank" rel="noreferrer">© OpenMapTiles</a>
+                <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">
+                  © OpenStreetMap contributors
+                </a>
+              </>
+            )}
           </div>
         </aside>
 
@@ -753,6 +798,7 @@ export default function App() {
           onContextMenu={handleStageContextMenu}
         >
           <MapView
+            baseMap={baseMap}
             mapRef={mapRef}
             baseLayersRef={baseLayersRef}
             drawingsLayer={drawingTools.layer}
@@ -760,6 +806,7 @@ export default function App() {
             terrainClipGeometry={activeTerrainClipGeometry}
             onStatusChange={handleMapStatus}
             onQgisStatusChange={handleQgisStatusChange}
+            onOpenFreeMapStatusChange={handleOpenFreeMapStatusChange}
             onOverlayAvailabilityChange={handleOverlayAvailabilityChange}
             onTopographicAvailabilityChange={handleTopographicAvailabilityChange}
             onMapReady={drawingTools.connectMap}
@@ -876,7 +923,18 @@ export default function App() {
               No se pudieron cargar algunas teselas. Comprueba tu conexión.
             </div>
           )}
-          {qgisStatus === "error" && (
+          {selectedVectorBaseMap && selectedVectorStatus === "loading" && (
+            <div className="map-status map-status--loading" role="status">
+              <LoaderCircle size={15} className="spinner" aria-hidden="true" />
+              <span>Cargando el mapa {OPEN_FREE_MAP_STYLES[selectedVectorBaseMap].title.toLowerCase()}…</span>
+            </div>
+          )}
+          {baseMapNotice && (
+            <div className="map-status map-status--error" role="status">
+              {baseMapNotice}
+            </div>
+          )}
+          {baseMap === "osm" && qgisStatus === "error" && (
             <div className="map-status map-status--error qgis-unavailable-notice" role="status">
               La cartografía QGIS no está disponible. OpenStreetMap sigue activo.
             </div>

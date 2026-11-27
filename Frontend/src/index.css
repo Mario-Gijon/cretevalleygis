@@ -502,9 +502,9 @@ button {
 }
 
 .base-map-options {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .thematic-layer-section {
@@ -752,14 +752,17 @@ button {
 }
 
 .base-map-option {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 12px;
+  grid-template-rows: 20px minmax(0, 1fr);
   align-items: center;
-  gap: 11px;
+  gap: 4px;
   width: 100%;
-  min-height: 65px;
-  padding: 10px 9px;
+  min-width: 0;
+  min-height: 58px;
+  padding: 6px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--surface-raised);
   color: var(--text);
   font: inherit;
@@ -785,6 +788,113 @@ button {
 .app-shell[data-theme="dark"] .base-map-option[aria-checked="true"] {
   border-color: color-mix(in srgb, #75d7d5 48%, var(--border));
   background: color-mix(in srgb, #75d7d5 7%, var(--surface-raised));
+}
+
+.base-map-option .layer-copy {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  gap: 2px;
+}
+
+.base-map-option .layer-title {
+  overflow: visible;
+  font-size: 9px;
+  line-height: 1.05;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.base-map-option .layer-subtitle {
+  overflow: hidden;
+  font-size: 8px;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.base-map-preview {
+  position: relative;
+  display: block;
+  grid-column: 1;
+  grid-row: 1;
+  width: 24px;
+  height: 18px;
+  overflow: hidden;
+  border: 1px solid rgb(20 43 64 / 12%);
+  border-radius: 6px;
+  background: var(--preview-background, #f2f4f5);
+}
+
+.base-map-preview::before,
+.base-map-preview::after {
+  position: absolute;
+  left: -5px;
+  width: 38px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--preview-road, #ffffff);
+  content: "";
+}
+
+.base-map-preview::before {
+  top: 8px;
+  transform: rotate(-26deg);
+}
+
+.base-map-preview::after {
+  top: 16px;
+  left: 1px;
+  width: 30px;
+  background: var(--preview-road-secondary, #dce3e8);
+  transform: rotate(24deg);
+}
+
+.base-map-preview--positron {
+  --preview-background: #f0f2f2;
+  --preview-road: #ffffff;
+  --preview-road-secondary: #d5dcdf;
+}
+
+.base-map-preview--dark {
+  --preview-background: #17232d;
+  --preview-road: #344754;
+  --preview-road-secondary: #526d78;
+  border-color: #47606d;
+}
+
+.base-map-preview--liberty {
+  --preview-background: #e5ead9;
+  --preview-road: #fff7d8;
+  --preview-road-secondary: #e99470;
+}
+
+.base-map-preview--osm {
+  --preview-background: #e4ecd9;
+  --preview-road: #ffffff;
+  --preview-road-secondary: #f1bd78;
+}
+
+.base-map-preview--qgis {
+  --preview-background: #f3eee4;
+  --preview-road: #d5e7e4;
+  --preview-road-secondary: #88a67d;
+}
+
+.base-map-loading {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  color: var(--cv-blue);
+}
+
+.base-map-indicator {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+}
+
+.app-shell[data-theme="dark"] .base-map-loading {
+  color: #83d7d3;
 }
 
 .layer-symbol {

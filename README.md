@@ -18,6 +18,12 @@ La demo QWC2 permanece disponible en <http://localhost:5176/?t=qwc_demo>. Si sol
 
 El contenedor Vite ejecuta con el UID/GID del host para que los archivos de `Frontend/dist` sigan siendo editables. El valor predeterminado es `1000:1000`; si tu usuario usa otros identificadores, define `HOST_UID` y `HOST_GID` en `.env` antes de arrancar Compose.
 
+## Mapas base y datos de análisis
+
+El selector incluye **Minimalista** (OpenFreeMap Positron, inicial), **Oscuro** (Dark), **Detallado** (Liberty), OpenStreetMap y Crete Valley GIS (QGIS). OpenFreeMap usa `ol-mapbox-style` sobre la instancia OpenLayers existente; los estilos y sus recursos vectoriales se cargan al elegir cada estilo, sin clave de API. Si falla la carga, el visor vuelve a OpenStreetMap y muestra un aviso sin bloquear las herramientas.
+
+Las atribuciones de los mapas se muestran en el control del mapa y en el panel: [OpenFreeMap](https://openfreemap.org/), [OpenMapTiles](https://openmaptiles.org/) y [OpenStreetMap](https://www.openstreetmap.org/copyright) para los estilos vectoriales; OpenStreetMap para su mapa base; Natural Earth para QGIS. Consulta [OpenFreeMap Quick Start](https://openfreemap.org/quick_start/) y la [documentación de `ol-mapbox-style`](https://openlayers.org/ol-mapbox-style/). Los mapas base son únicamente para visualización: los futuros criterios deberán calcularse con los datos geográficos originales, nunca leyendo los colores de teselas renderizadas.
+
 ## Mapa mundial propio
 
 El servicio ejecuta QGIS Server `3.44.16` desde la imagen oficial de QGIS, fijada por versión y digest, con límites de 1 CPU y 1 GiB de memoria. El servicio auxiliar `qgis-world-data` prepara únicamente los 18 conjuntos necesarios de Natural Earth: tierra, países, límites, localidades, ríos y lagos para 1:110m, 1:50m y 1:10m. Cada archivo comprimido se valida con SHA-256 antes de extraerse a un volumen Docker; no se versionan los datasets ni el proyecto generado.

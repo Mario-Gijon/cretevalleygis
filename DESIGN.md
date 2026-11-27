@@ -7,4 +7,5 @@
 - Los elementos dibujados usan azul y turquesa, aparecen en una lista sencilla del panel y se pueden centrar desde esa lista.
 - La ficha del elemento seleccionado muestra mediciones geodésicas orientativas junto a la lista. Las herramientas de medición usan una capa temporal independiente y ofrecen una acción visible para terminar o cancelar el trazo.
 - La escala métrica y la lectura de medición se mantienen compactas en el borde inferior del mapa, también en pantallas pequeñas.
-- OpenStreetMap es la capa base de demostración. Su atribución se mantiene visible y el mapa solo solicita teselas del área que la persona está viendo.
+- El selector compacto distingue mapas base de capas de análisis: Positron es la opción inicial, con Dark, Liberty, OpenStreetMap y QGIS como alternativas. Los estilos vectoriales se cargan bajo demanda sobre OpenLayers y sus atribuciones permanecen visibles.
+- Las capas de terreno y los elementos dibujados permanecen por encima del mapa base; las teselas renderizadas sirven solo para contexto visual, nunca como dato de cálculo.

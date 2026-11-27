@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Feature from "ol/Feature.js";
 import type Map from "ol/Map.js";
 import Attribution from "ol/control/Attribution.js";
@@ -7,6 +7,8 @@ import { fromLonLat, toLonLat, transformExtent } from "ol/proj.js";
 import OSM from "ol/source/OSM.js";
 import ImageWMS from "ol/source/ImageWMS.js";
 import OlMap from "ol/Map.js";
+import LayerGroup from "ol/layer/Group.js";
+import VectorTileLayer from "ol/layer/VectorTile.js";
 import type VectorLayer from "ol/layer/Vector.js";
 import type Geometry from "ol/geom/Geometry.js";
 import TileLayer from "ol/layer/Tile.js";
@@ -18,6 +20,13 @@ import type RenderEvent from "ol/render/Event.js";
 import Fill from "ol/style/Fill.js";
 import Style from "ol/style/Style.js";
 import View from "ol/View.js";
+import {
+  OPEN_FREE_MAP_ATTRIBUTION_HTML,
+  OPEN_FREE_MAP_STYLES,
+  type BaseMapId,
+  type OpenFreeMapId,
+  type OpenFreeMapStatus,
+} from "@/lib/base-maps";
 import {
   BASE_MAP_WMS_LAYERS,
   GEOGRAPHIC_OVERLAYS,
@@ -38,19 +47,22 @@ export type MapStatus = {
 
 type MutableRef<T> = { current: T };
 
-export type BaseMapId = "osm" | "qgis";
 export type OverlayLayers = Record<GeographicOverlayId, ImageLayer<ImageWMS>>;
 export type TopographicLayers = Record<TopographicLayerId, ImageLayer<ImageWMS>>;
+export type VectorBaseMapLayers = Record<OpenFreeMapId, LayerGroup>;
 export type BaseMapLayers = {
   osm: TileLayer<OSM>;
   qgis: ImageLayer<ImageWMS>;
+  vector: VectorBaseMapLayers;
   overlays: OverlayLayers;
   topography: TopographicLayers;
   regionalTopography: TopographicLayers;
 };
 export type QgisStatus = "idle" | "loading" | "available" | "error";
+type VectorTileListenerCleanup = () => void;
 
 type MapViewProps = {
+  baseMap: BaseMapId;
   mapRef: MutableRef<Map | null>;
   baseLayersRef: MutableRef<BaseMapLayers | null>;
   drawingsLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
@@ -58,6 +70,7 @@ type MapViewProps = {
   terrainClipGeometry: Polygon | null;
   onStatusChange: (status: MapStatus) => void;
   onQgisStatusChange: (status: QgisStatus) => void;
+  onOpenFreeMapStatusChange: (id: OpenFreeMapId, status: OpenFreeMapStatus) => void;
   onOverlayAvailabilityChange: (id: GeographicOverlayId, available: boolean) => void;
   onTopographicAvailabilityChange: (id: TopographicLayerId, available: boolean) => void;
   onMapReady: (map: Map) => (() => void) | void;
@@ -69,6 +82,7 @@ type MapViewProps = {
 };
 
 export default function MapView({
+  baseMap,
   mapRef,
   baseLayersRef,
   drawingsLayer,
@@ -76,15 +90,25 @@ export default function MapView({
   terrainClipGeometry,
   onStatusChange,
   onQgisStatusChange,
+  onOpenFreeMapStatusChange,
   onOverlayAvailabilityChange,
   onTopographicAvailabilityChange,
   onMapReady,
   onCenterChange,
 }: MapViewProps) {
   const targetRef = useRef<HTMLDivElement>(null);
+  const [mapGeneration, setMapGeneration] = useState(0);
+  const baseMapRef = useRef(baseMap);
+  const vectorLoadedRef = useRef(new Set<OpenFreeMapId>());
+  const vectorPromisesRef = useRef(new globalThis.Map<OpenFreeMapId, Promise<void>>());
+  const vectorTileListenersRef = useRef(new globalThis.Map<OpenFreeMapId, VectorTileListenerCleanup[]>());
+  const activeBaseMapRef = useRef<BaseMapId | null>(null);
+  const disposedRef = useRef(false);
+  baseMapRef.current = baseMap;
 
   useEffect(() => {
     if (!targetRef.current) return;
+    disposedRef.current = false;
 
     let pendingTiles = 0;
     let mapReady = false;
@@ -93,7 +117,7 @@ export default function MapView({
     let qgisLoadedOnce = false;
     let initialQgisFailureTimer: ReturnType<typeof setTimeout> | undefined;
     const osmSource = new OSM();
-    const osmLayer = new TileLayer({ source: osmSource });
+    const osmLayer = new TileLayer({ source: osmSource, visible: false });
     const naturalEarthAttribution = '<a href="https://www.naturalearthdata.com/" target="_blank" rel="noreferrer">Made with Natural Earth</a>';
     const qgisSource = new ImageWMS({
       url: "/qgis/ogc/world",
@@ -108,6 +132,12 @@ export default function MapView({
       attributions: naturalEarthAttribution,
     });
     const qgisLayer = new ImageLayer({ source: qgisSource, visible: false });
+    const vectorBaseMapLayers = Object.fromEntries(
+      Object.keys(OPEN_FREE_MAP_STYLES).map((id) => [
+        id,
+        new LayerGroup({ visible: false, layers: [] }),
+      ]),
+    ) as VectorBaseMapLayers;
     const overlaySources = Object.fromEntries(
       Object.entries(GEOGRAPHIC_OVERLAYS).map(([id, overlay]) => [
         id,
@@ -184,6 +214,7 @@ export default function MapView({
       layers: [
         osmLayer,
         qgisLayer,
+        ...Object.values(vectorBaseMapLayers),
         topographicLayers.elevation,
         topographicLayers.hillshade,
         regionalTopographicLayers.elevation,
@@ -329,10 +360,12 @@ export default function MapView({
     baseLayersRef.current = {
       osm: osmLayer,
       qgis: qgisLayer,
+      vector: vectorBaseMapLayers,
       overlays: overlayLayers,
       topography: topographicLayers,
       regionalTopography: regionalTopographicLayers,
     };
+    setMapGeneration((generation) => generation + 1);
     const updateCenter = () => {
       const center = map.getView().getCenter();
       if (!center) return;
@@ -349,6 +382,8 @@ export default function MapView({
     const detachDrawingTools = onMapReady(map);
 
     return () => {
+      disposedRef.current = true;
+      activeBaseMapRef.current = null;
       osmSource.un("tileloadstart", tileStarted);
       osmSource.un("tileloadend", tileLoaded);
       osmSource.un("tileloaderror", tileFailed);
@@ -367,6 +402,10 @@ export default function MapView({
         source.un("imageloaderror", onError);
         layer.un("change:visible", onVisibilityChange);
       });
+      vectorTileListenersRef.current.forEach((cleanups) => cleanups.forEach((cleanup) => cleanup()));
+      vectorTileListenersRef.current.clear();
+      vectorPromisesRef.current.clear();
+      vectorLoadedRef.current.clear();
       map.un("rendercomplete", firstRender);
       map.un("moveend", updateCenter);
       map.un("change:size", updateCenter);
@@ -376,6 +415,104 @@ export default function MapView({
       baseLayersRef.current = null;
     };
   }, [baseLayersRef, drawingsLayer, mapRef, measurementsLayer, onCenterChange, onMapReady, onOverlayAvailabilityChange, onQgisStatusChange, onStatusChange, onTopographicAvailabilityChange]);
+
+  useEffect(() => {
+    const layers = baseLayersRef.current;
+    if (!layers) return;
+
+    const activate = (id: BaseMapId) => {
+      layers.osm.setVisible(id === "osm");
+      layers.qgis.setVisible(id === "qgis");
+      (Object.keys(layers.vector) as OpenFreeMapId[]).forEach((vectorId) => {
+        layers.vector[vectorId].setVisible(vectorId === id);
+      });
+      activeBaseMapRef.current = id;
+      mapRef.current?.render();
+    };
+
+    if (baseMap === "osm" || baseMap === "qgis") {
+      activate(baseMap);
+      return;
+    }
+
+    const group = layers.vector[baseMap];
+    if (vectorLoadedRef.current.has(baseMap)) {
+      activate(baseMap);
+      onOpenFreeMapStatusChange(baseMap, "available");
+      return;
+    }
+
+    onOpenFreeMapStatusChange(baseMap, "loading");
+    if (vectorPromisesRef.current.has(baseMap)) return;
+
+    const styleId = baseMap;
+    const styleUrl = OPEN_FREE_MAP_STYLES[styleId].url;
+    let loadPromise: Promise<void>;
+    loadPromise = import("ol-mapbox-style")
+      .then(({ apply }) => apply(group, styleUrl))
+      .then(() => {
+        if (disposedRef.current || baseLayersRef.current?.vector[styleId] !== group) {
+          if (vectorPromisesRef.current.get(styleId) === loadPromise) {
+            vectorPromisesRef.current.delete(styleId);
+          }
+          return;
+        }
+        vectorLoadedRef.current.add(styleId);
+
+        const cleanups: VectorTileListenerCleanup[] = [];
+        group.getLayers().forEach((layer) => {
+          if (!(layer instanceof VectorTileLayer)) return;
+          const source = layer.getSource();
+          if (!source) return;
+          source.setAttributions(OPEN_FREE_MAP_ATTRIBUTION_HTML);
+
+          let failedTiles = 0;
+          let errorTimer: ReturnType<typeof setTimeout> | undefined;
+          const onLoad = () => {
+            failedTiles = 0;
+            if (errorTimer) clearTimeout(errorTimer);
+            errorTimer = undefined;
+            if (activeBaseMapRef.current === styleId) {
+              onOpenFreeMapStatusChange(styleId, "available");
+            }
+          };
+          const onError = () => {
+            failedTiles += 1;
+            if (errorTimer) return;
+            errorTimer = setTimeout(() => {
+              errorTimer = undefined;
+              if (failedTiles > 0 && activeBaseMapRef.current === styleId) {
+                onOpenFreeMapStatusChange(styleId, "error");
+              }
+            }, 2500);
+          };
+          source.on("tileloadend", onLoad);
+          source.on("tileloaderror", onError);
+          cleanups.push(() => {
+            if (errorTimer) clearTimeout(errorTimer);
+            source.un("tileloadend", onLoad);
+            source.un("tileloaderror", onError);
+          });
+        });
+        vectorTileListenersRef.current.set(styleId, cleanups);
+
+        onOpenFreeMapStatusChange(styleId, "available");
+        if (baseMapRef.current === styleId) activate(styleId);
+      })
+      .catch(() => {
+        group.getLayers().clear();
+        if (baseLayersRef.current?.vector[styleId] !== group) {
+          if (vectorPromisesRef.current.get(styleId) === loadPromise) {
+            vectorPromisesRef.current.delete(styleId);
+          }
+          return;
+        }
+        vectorLoadedRef.current.delete(styleId);
+        vectorPromisesRef.current.delete(styleId);
+        if (!disposedRef.current) onOpenFreeMapStatusChange(styleId, "error");
+      });
+    vectorPromisesRef.current.set(styleId, loadPromise);
+  }, [baseLayersRef, baseMap, mapGeneration, mapRef, onOpenFreeMapStatusChange]);
 
   useEffect(() => {
     const map = mapRef.current;
