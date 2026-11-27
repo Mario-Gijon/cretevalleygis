@@ -779,6 +779,25 @@ button {
   gap: 6px;
 }
 
+.base-map-selector {
+  display: grid;
+  gap: 0;
+}
+
+.base-map-group-title {
+  margin: 0 0 5px 1px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.025em;
+}
+
+.base-map-group-title--terrain {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
 .thematic-layer-section {
   margin-top: 11px;
 }
@@ -1575,10 +1594,29 @@ button {
   --preview-road-secondary: #88a67d;
 }
 
-.base-map-preview--topographic {
-  --preview-background: repeating-radial-gradient(ellipse at 56% 52%, transparent 0 2px, rgb(255 255 255 / 35%) 2.5px 3px), linear-gradient(135deg, #6b9a69, #b9bb79 48%, #b47c68 75%, #745879);
-  --preview-road: #f4e7c2;
-  --preview-road-secondary: #597e68;
+.base-map-preview--terrain-elevation {
+  background:
+    repeating-radial-gradient(ellipse at 48% 55%, transparent 0 5px, rgb(255 255 255 / 52%) 5.5px 6.5px),
+    linear-gradient(135deg, #47876a 5%, #8ea66d 31%, #d3bd79 54%, #aa7c68 75%, #66516f 100%);
+}
+
+.base-map-preview--terrain-slope {
+  background:
+    repeating-linear-gradient(135deg, transparent 0 8px, rgb(255 255 255 / 24%) 8px 9px),
+    linear-gradient(90deg, #4f9f83 0 20%, #a8c96f 20% 40%, #f0df73 40% 60%, #ed9c58 60% 80%, #c84a43 80% 100%);
+}
+
+.base-map-preview--terrain-aspect {
+  background: conic-gradient(from -22.5deg at 50% 50%, #f2d34f 0deg 45deg, #9bc85b 45deg 90deg, #48a88e 90deg 135deg, #4b9dc5 135deg 180deg, #526dba 180deg 225deg, #8567b8 225deg 270deg, #c06b9b 270deg 315deg, #e18759 315deg 360deg);
+}
+
+.base-map-preview--terrain-elevation::before,
+.base-map-preview--terrain-elevation::after,
+.base-map-preview--terrain-slope::before,
+.base-map-preview--terrain-slope::after,
+.base-map-preview--terrain-aspect::before,
+.base-map-preview--terrain-aspect::after {
+  display: none;
 }
 
 .base-map-loading {

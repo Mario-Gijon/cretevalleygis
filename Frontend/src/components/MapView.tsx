@@ -23,6 +23,7 @@ import View from "ol/View.js";
 import {
   OPEN_FREE_MAP_ATTRIBUTION_HTML,
   OPEN_FREE_MAP_STYLES,
+  isTerrainBaseMap,
   type BaseMapId,
   type OpenFreeMapId,
   type OpenFreeMapStatus,
@@ -511,13 +512,12 @@ export default function MapView({
       const sourceZoom = effectiveTerrainSourceZoom(tileZoom, EXPLORATION_TERRAIN.maxDataZoom);
       const sourceResolution = tileGrid?.getResolution(sourceZoom) ?? resolution;
       const theme = explorationTerrainThemeRef.current;
-      const derivativesVisible = zoom >= EXPLORATION_TERRAIN.derivativeMinimumZoom;
       layer.updateStyleVariables({
         groundResolution: terrainPixelGroundDistanceMeters(sourceResolution, latitude),
         showHillshade: explorationEnabledRef.current ? 1 : 0,
         showElevation: theme === "elevation" ? 1 : 0,
-        showSlope: theme === "slope" && derivativesVisible ? 1 : 0,
-        showAspect: theme === "aspect" && derivativesVisible ? 1 : 0,
+        showSlope: theme === "slope" ? 1 : 0,
+        showAspect: theme === "aspect" ? 1 : 0,
         hillshadeOpacity: explorationOpacityRef.current / 100,
         themeOpacity: explorationThemeOpacityRef.current / 100,
         adaptiveScale: scale.effectiveMode === "adaptive" ? 1 : 0,
@@ -628,32 +628,22 @@ export default function MapView({
     const updateExplorationVisibility = (zoom: number, latitude: number, resolution: number) => {
       const layer = explorationTerrainRef.current;
       const hasWebGL = layer !== null;
-      const isTopographicBasemap = activeBaseMapRef.current === "topographic";
-      const minimumZoom = isTopographicBasemap
-        ? EXPLORATION_TERRAIN.topographicBasemapMinZoom
-        : EXPLORATION_TERRAIN.overlayMinZoom;
-      const scaleReady = zoom >= minimumZoom;
+      const isTerrainBasemap = activeBaseMapRef.current !== null && isTerrainBaseMap(activeBaseMapRef.current);
       const hillshadeEnabled = explorationEnabledRef.current;
-      const theme = explorationTerrainThemeRef.current;
-      const derivativeTheme = theme === "slope" || theme === "aspect";
-      const themeVisibleAtScale = !derivativeTheme || zoom >= EXPLORATION_TERRAIN.derivativeMinimumZoom;
-      const thematicEnabled = theme !== "none" && themeVisibleAtScale;
+      const thematicEnabled = explorationTerrainThemeRef.current !== "none";
       const visible = Boolean(
         layer
-        && isTopographicBasemap
+        && isTerrainBasemap
         && (hillshadeEnabled || thematicEnabled)
-        && scaleReady,
+        && zoom >= EXPLORATION_TERRAIN.mapMinimumZoom,
       );
       if (layer) {
         layer.setVisible(visible);
         updateExplorationStyle(resolution, latitude, zoom);
       }
       if (!hasWebGL) explorationStatusRef.current?.("unavailable");
-      else if (!isTopographicBasemap) explorationStatusRef.current?.("disabled");
-      else if (!hillshadeEnabled && theme === "none") explorationStatusRef.current?.("disabled");
-      else if (!hillshadeEnabled && derivativeTheme && !themeVisibleAtScale) explorationStatusRef.current?.("scale");
+      else if (!isTerrainBasemap) explorationStatusRef.current?.("disabled");
       else if (!hillshadeEnabled && !thematicEnabled) explorationStatusRef.current?.("disabled");
-      else if (!scaleReady) explorationStatusRef.current?.("scale");
       else if (explorationHasErrorRef.current) explorationStatusRef.current?.("error");
       else if (explorationHasLoadedRef.current) {
         explorationStatusRef.current?.(zoom > EXPLORATION_TERRAIN.maxDataZoom ? "overzoom" : "active");
@@ -861,11 +851,12 @@ export default function MapView({
     if (!layers) return;
 
     const activate = (id: BaseMapId, forceOsmUnderlay = false) => {
-      const styleId: OpenFreeMapId | null = id === "topographic"
+      const isTerrain = isTerrainBaseMap(id);
+      const styleId: OpenFreeMapId | null = isTerrain
         ? "positron"
         : id === "osm" || id === "qgis" ? null : id;
       const useVectorUnderlay = Boolean(styleId && vectorLoadedRef.current.has(styleId) && !forceOsmUnderlay);
-      layers.osm.setVisible(id === "osm" || (id === "topographic" && !useVectorUnderlay));
+      layers.osm.setVisible(id === "osm" || (isTerrain && !useVectorUnderlay));
       layers.qgis.setVisible(id === "qgis");
       (Object.keys(layers.vector) as OpenFreeMapId[]).forEach((vectorId) => {
         layers.vector[vectorId].setVisible(vectorId === styleId && useVectorUnderlay);
@@ -883,7 +874,7 @@ export default function MapView({
       mapRef.current?.render();
     };
 
-    if (baseMap !== "topographic") {
+    if (!isTerrainBaseMap(baseMap)) {
       activeBaseMapRef.current = baseMap;
       layers.explorationTerrain?.setVisible(false);
       const view = mapRef.current?.getView();
@@ -903,9 +894,9 @@ export default function MapView({
       return;
     }
 
-    const styleId: OpenFreeMapId = baseMap === "topographic" ? "positron" : baseMap;
+    const styleId: OpenFreeMapId = isTerrainBaseMap(baseMap) ? "positron" : baseMap;
     const group = layers.vector[styleId];
-    if (baseMap === "topographic") activate(baseMap);
+    if (isTerrainBaseMap(baseMap)) activate(baseMap);
     if (vectorLoadedRef.current.has(styleId)) {
       activate(baseMap);
       onOpenFreeMapStatusChange(styleId, "available");
@@ -942,10 +933,10 @@ export default function MapView({
             if (errorTimer) clearTimeout(errorTimer);
             errorTimer = undefined;
             const isActiveBackground = activeBaseMapRef.current === styleId
-              || (styleId === "positron" && activeBaseMapRef.current === "topographic");
+              || (styleId === "positron" && activeBaseMapRef.current !== null && isTerrainBaseMap(activeBaseMapRef.current));
             if (isActiveBackground) {
               onOpenFreeMapStatusChange(styleId, "available");
-              if (activeBaseMapRef.current === "topographic") activate("topographic");
+              if (activeBaseMapRef.current !== null && isTerrainBaseMap(activeBaseMapRef.current)) activate(activeBaseMapRef.current);
             }
           };
           const onError = () => {
@@ -954,10 +945,10 @@ export default function MapView({
             errorTimer = setTimeout(() => {
               errorTimer = undefined;
               const isActiveBackground = activeBaseMapRef.current === styleId
-                || (styleId === "positron" && activeBaseMapRef.current === "topographic");
+                || (styleId === "positron" && activeBaseMapRef.current !== null && isTerrainBaseMap(activeBaseMapRef.current));
               if (failedTiles > 0 && isActiveBackground) {
                 onOpenFreeMapStatusChange(styleId, "error");
-                if (activeBaseMapRef.current === "topographic") activate("topographic", true);
+                if (activeBaseMapRef.current !== null && isTerrainBaseMap(activeBaseMapRef.current)) activate(activeBaseMapRef.current, true);
               }
             }, 2500);
           };
@@ -986,7 +977,7 @@ export default function MapView({
         vectorPromisesRef.current.delete(styleId);
         if (!disposedRef.current) {
           onOpenFreeMapStatusChange(styleId, "error");
-          if (baseMapRef.current === "topographic") activate("topographic", true);
+          if (isTerrainBaseMap(baseMapRef.current)) activate(baseMapRef.current, true);
         }
       });
     vectorPromisesRef.current.set(styleId, loadPromise);

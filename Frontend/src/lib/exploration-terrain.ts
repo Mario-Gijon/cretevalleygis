@@ -1,8 +1,7 @@
 export const EXPLORATION_TERRAIN = {
   url: "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png",
   mapMinimumZoom: 2,
-  overlayMinZoom: 4,
-  topographicBasemapMinZoom: 2,
+  generalizedZoomThreshold: 8,
   maxDataZoom: 15,
   cacheSize: 96,
   sampleCacheSize: 96,
@@ -22,7 +21,8 @@ export const EXPLORATION_TERRAIN = {
   elevationStorageKey: "cv-gis-exploration-elevation",
   elevationModeStorageKey: "cv-gis-exploration-elevation-mode",
   themeStorageKey: "cv-gis-exploration-theme",
-  derivativeMinimumZoom: 8,
+  themeOpacityStorageKey: "cv-gis-exploration-theme-opacity",
+  defaultThemeOpacity: 70,
   flatAspectThresholdPercent: 0.1,
   aspectSectorHalfWidthDegrees: 22.5,
 } as const;
@@ -66,6 +66,27 @@ export const ADAPTIVE_LAND_STOPS = [
 
 export type ExplorationElevationMode = "adaptive" | "absolute";
 export type ExplorationTerrainTheme = "none" | "elevation" | "slope" | "aspect";
+export type ExplorationTerrainRepresentation = Exclude<ExplorationTerrainTheme, "none">;
+
+export function initialExplorationThemeOpacities(): Record<ExplorationTerrainRepresentation, number> {
+  const defaults: Record<ExplorationTerrainRepresentation, number> = {
+    elevation: EXPLORATION_TERRAIN.defaultThemeOpacity,
+    slope: EXPLORATION_TERRAIN.defaultThemeOpacity,
+    aspect: EXPLORATION_TERRAIN.defaultThemeOpacity,
+  };
+  try {
+    for (const theme of Object.keys(defaults) as ExplorationTerrainRepresentation[]) {
+      const stored = window.localStorage.getItem(`${EXPLORATION_TERRAIN.themeOpacityStorageKey}-${theme}`);
+      if (stored !== null) {
+        const value = Number(stored);
+        if (Number.isFinite(value)) defaults[theme] = Math.max(0, Math.min(80, value));
+      }
+    }
+  } catch {
+    // Keep the defaults when browser storage is unavailable.
+  }
+  return defaults;
+}
 
 export const SLOPE_CLASSES = [
   { maximumPercent: 5, color: "#4f9f83", label: "0–5 %" },
@@ -201,20 +222,6 @@ export function initialExplorationElevationMode(): ExplorationElevationMode {
       : EXPLORATION_TERRAIN.defaultElevationMode;
   } catch {
     return EXPLORATION_TERRAIN.defaultElevationMode;
-  }
-}
-
-export function initialExplorationTerrainTheme(): ExplorationTerrainTheme {
-  try {
-    const storedTheme = window.localStorage.getItem(EXPLORATION_TERRAIN.themeStorageKey);
-    if (storedTheme === "none" || storedTheme === "elevation" || storedTheme === "slope" || storedTheme === "aspect") {
-      return storedTheme;
-    }
-    // Preserve the elevation preference from earlier versions of the viewer.
-    const legacyElevation = window.localStorage.getItem(EXPLORATION_TERRAIN.elevationStorageKey);
-    return legacyElevation === null || legacyElevation === "true" ? "elevation" : "none";
-  } catch {
-    return "elevation";
   }
 }
 

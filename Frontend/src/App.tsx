@@ -24,7 +24,16 @@ import {
 import { fromLonLat } from "ol/proj.js";
 import type OlMap from "ol/Map.js";
 import MapView, { type BaseMapLayers, type MapStatus, type QgisStatus } from "@/components/MapView";
-import { OPEN_FREE_MAP_STYLES, type BaseMapId, type OpenFreeMapId, type OpenFreeMapStatus } from "@/lib/base-maps";
+import {
+  OPEN_FREE_MAP_STYLES,
+  TERRAIN_BASE_MAPS,
+  isTerrainBaseMap,
+  terrainThemeForBaseMap,
+  type BaseMapId,
+  type OpenFreeMapId,
+  type OpenFreeMapStatus,
+  type TerrainBaseMapId,
+} from "@/lib/base-maps";
 import { DrawnElementsList } from "@/components/DrawnElementsList";
 import { GeometryDetails } from "@/components/GeometryDetails";
 import { DrawingToolbar } from "@/components/DrawingToolbar";
@@ -47,9 +56,9 @@ import {
   ADAPTIVE_LAND_STOPS,
   OCEAN_ELEVATION_STOPS,
   absoluteElevationScale,
+  initialExplorationThemeOpacities,
   initialExplorationElevationMode,
   initialExplorationHillshadeEnabled,
-  initialExplorationTerrainTheme,
   ASPECT_CLASSES,
   ASPECT_FLAT_COLOR,
   SLOPE_CLASSES,
@@ -62,6 +71,7 @@ import {
 type ThemeMode = "light" | "dark";
 type PanelTab = "layers" | "areas";
 type AreaPanelView = "list" | "detail";
+type TerrainTheme = "elevation" | "slope" | "aspect";
 
 function initialTheme(): ThemeMode {
   try {
@@ -71,27 +81,45 @@ function initialTheme(): ThemeMode {
   }
 }
 
+function initialBaseMap(): BaseMapId {
+  try {
+    const previousTheme = window.localStorage.getItem(EXPLORATION_TERRAIN.themeStorageKey);
+    if (previousTheme === "elevation" || previousTheme === "slope" || previousTheme === "aspect") {
+      return `terrain-${previousTheme}` as TerrainBaseMapId;
+    }
+    if (previousTheme === null && window.localStorage.getItem(EXPLORATION_TERRAIN.elevationStorageKey) === "true") {
+      return "terrain-elevation";
+    }
+  } catch {
+    // Use the default map if local storage is unavailable.
+  }
+  return "positron";
+}
+
 const BASE_MAP_OPTIONS: Array<{ id: BaseMapId; title: string; description: string }> = [
   { id: "positron", title: "Minimalista", description: "Fondo claro y limpio" },
   { id: "dark", title: "Oscuro", description: "Contraste nocturno" },
   { id: "liberty", title: "Detallado", description: "Calles y lugares" },
   { id: "osm", title: "OpenStreetMap", description: "Calles y lugares" },
   { id: "qgis", title: "Crete Valley GIS", description: "Cartografía propia · Natural Earth" },
-  { id: "topographic", title: "Topográfico", description: "Elevaciones y relieve del terreno" },
 ];
 
-function explorationTerrainStatusMessage(status: ExplorationTerrainStatus, zoom: number, theme: ExplorationTerrainTheme): string {
-  if ((theme === "slope" || theme === "aspect") && zoom < EXPLORATION_TERRAIN.derivativeMinimumZoom) {
-    return `Acércate al zoom ${EXPLORATION_TERRAIN.derivativeMinimumZoom} para ver ${theme === "slope" ? "las pendientes" : "la orientación"}.`;
-  }
-  if (status === "disabled") return "Relieve desactivado.";
-  if (status === "scale") return "Acércate para mostrar el relieve.";
-  if (status === "loading") return "Cargando relieve…";
-  if (status === "active") return "Relieve activo.";
-  if (status === "overzoom") return "Mostrando el detalle máximo disponible.";
+const TERRAIN_MAP_OPTIONS: Array<{ id: TerrainBaseMapId; title: string; description: string }> = [
+  { id: "terrain-elevation", title: "Elevación", description: "Altitud del terreno" },
+  { id: "terrain-slope", title: "Pendientes", description: "Inclinación del terreno" },
+  { id: "terrain-aspect", title: "Orientación de laderas", description: "Orientación de laderas" },
+];
+
+function explorationTerrainStatusMessage(status: ExplorationTerrainStatus, zoom: number): string {
+  const generalized = zoom < EXPLORATION_TERRAIN.generalizedZoomThreshold;
+  if (status === "disabled") return "Representación desactivada.";
+  if (status === "scale") return "Representación no disponible a esta escala.";
+  if (status === "loading") return generalized ? "Cargando · vista generalizada…" : "Cargando representación…";
+  if (status === "active") return generalized ? "Activa · vista generalizada." : "Representación activa.";
+  if (status === "overzoom") return "Activa · detalle máximo disponible.";
   if (status === "unavailable") return "El relieve no está disponible en este navegador.";
   if (status === "error") return "No se pudieron cargar algunas teselas.";
-  return `Relieve disponible · zoom ${zoom.toLocaleString("es-ES", { maximumFractionDigits: 1 })}.`;
+  return generalized ? "Datos generalizados a esta escala." : "Representación disponible.";
 }
 
 function elevationGradient(
@@ -119,7 +147,7 @@ export default function App() {
   const [areaPanelView, setAreaPanelView] = useState<AreaPanelView>("list");
   const [panelWidth, setPanelWidth] = useState(300);
   const panelResizeRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
-  const [baseMap, setBaseMap] = useState<BaseMapId>("positron");
+  const [baseMap, setBaseMap] = useState<BaseMapId>(initialBaseMap);
   const baseMapRef = useRef<BaseMapId>(baseMap);
   const [openFreeMapStatus, setOpenFreeMapStatus] = useState<Record<OpenFreeMapId, OpenFreeMapStatus>>({
     positron: "idle",
@@ -135,10 +163,9 @@ export default function App() {
     lakes: true,
   });
   const [explorationTerrainEnabled, setExplorationTerrainEnabled] = useState(initialExplorationHillshadeEnabled);
-  const [explorationTerrainTheme, setExplorationTerrainTheme] = useState<ExplorationTerrainTheme>(initialExplorationTerrainTheme);
   const [explorationElevationMode, setExplorationElevationMode] = useState<ExplorationElevationMode>(initialExplorationElevationMode);
   const [explorationTerrainOpacity, setExplorationTerrainOpacity] = useState<number>(EXPLORATION_TERRAIN.defaultHillshadeOpacity);
-  const [explorationThemeOpacity, setExplorationThemeOpacity] = useState<number>(EXPLORATION_TERRAIN.defaultElevationOpacity);
+  const [explorationThemeOpacities, setExplorationThemeOpacities] = useState(initialExplorationThemeOpacities);
   const [explorationElevationScale, setExplorationElevationScale] = useState<ExplorationElevationScale>(
     () => absoluteElevationScale(initialExplorationElevationMode()),
   );
@@ -180,16 +207,16 @@ export default function App() {
 
   const handleOpenFreeMapStatusChange = useCallback((id: OpenFreeMapId, status: OpenFreeMapStatus) => {
     setOpenFreeMapStatus((current) => ({ ...current, [id]: status }));
-    const isTopographicBackground = baseMapRef.current === "topographic" && id === "positron";
+    const isTerrainBackground = isTerrainBaseMap(baseMapRef.current) && id === "positron";
     if (status === "error") {
-      setBaseMapNotice(isTopographicBackground
+      setBaseMapNotice(isTerrainBackground
         ? "No se pudo cargar el fondo vectorial; OpenStreetMap sigue disponible bajo el relieve."
         : "No se pudo cargar el mapa vectorial. OpenStreetMap sigue disponible.");
       if (baseMapRef.current === id) {
         baseMapRef.current = "osm";
         setBaseMap("osm");
       }
-    } else if (status === "available" && (baseMapRef.current === id || isTopographicBackground)) {
+    } else if (status === "available" && (baseMapRef.current === id || isTerrainBackground)) {
       setBaseMapNotice(null);
     }
   }, []);
@@ -208,6 +235,15 @@ export default function App() {
     baseMapRef.current = next;
     setBaseMapNotice(null);
     setBaseMap(next);
+    const terrainTheme = terrainThemeForBaseMap(next);
+    if (terrainTheme) {
+      try {
+        // This is also the migration target for the former thematic selector.
+        window.localStorage.setItem(EXPLORATION_TERRAIN.themeStorageKey, terrainTheme);
+      } catch {
+        // The selected map remains active for this session if storage is unavailable.
+      }
+    }
     if (next === "qgis") setQgisStatus("loading");
   };
 
@@ -225,10 +261,10 @@ export default function App() {
     }
   };
 
-  const changeExplorationTerrainTheme = (nextTheme: ExplorationTerrainTheme) => {
-    setExplorationTerrainTheme(nextTheme);
+  const changeExplorationThemeOpacity = (terrainTheme: TerrainTheme, opacity: number) => {
+    setExplorationThemeOpacities((current) => ({ ...current, [terrainTheme]: opacity }));
     try {
-      window.localStorage.setItem(EXPLORATION_TERRAIN.themeStorageKey, nextTheme);
+      window.localStorage.setItem(`${EXPLORATION_TERRAIN.themeOpacityStorageKey}-${terrainTheme}`, String(opacity));
     } catch {
       // Keep this session's preference if browser storage is unavailable.
     }
@@ -261,12 +297,15 @@ export default function App() {
     setOverlayAvailability((current) => current[id] === available ? current : { ...current, [id]: available });
   }, []);
 
-  const selectedVectorBaseMap: OpenFreeMapId | null = baseMap === "topographic"
+  const selectedVectorBaseMap: OpenFreeMapId | null = isTerrainBaseMap(baseMap)
     ? "positron"
     : baseMap === "osm" || baseMap === "qgis" ? null : baseMap;
   const selectedVectorStatus = selectedVectorBaseMap ? openFreeMapStatus[selectedVectorBaseMap] : "idle";
   const selectedElement = drawingTools.selectedElementInfo;
-  const explorationStatusMessage = explorationTerrainStatusMessage(explorationTerrainStatus, mapZoom, explorationTerrainTheme);
+  const explorationTerrainTheme: ExplorationTerrainTheme = terrainThemeForBaseMap(baseMap) ?? "none";
+  const selectedTerrainTheme: TerrainTheme = terrainThemeForBaseMap(baseMap) ?? "elevation";
+  const explorationThemeOpacity = explorationThemeOpacities[selectedTerrainTheme];
+  const explorationStatusMessage = explorationTerrainStatusMessage(explorationTerrainStatus, mapZoom);
   const formatElevation = (value: number) => Math.round(value).toLocaleString("es-ES");
   const absoluteLandGradient = elevationGradient(ABSOLUTE_ELEVATION_STOPS, 0, ABSOLUTE_ELEVATION_MAX_M);
   const oceanExplorationGradient = elevationGradient(OCEAN_ELEVATION_STOPS, ABSOLUTE_ELEVATION_MIN_M, 0);
@@ -278,6 +317,46 @@ export default function App() {
   const visibleExplorationRequestedMode = visibleExplorationScale.requestedMode;
   const adaptiveScaleFallback = visibleExplorationScale.requestedMode === "adaptive"
     && visibleExplorationScale.effectiveMode !== "adaptive";
+
+  const renderBaseMapOption = (option: { id: BaseMapId; title: string; description: string }) => {
+    const terrain = isTerrainBaseMap(option.id);
+    const selected = baseMap === option.id;
+    const vectorId: OpenFreeMapId | null = isTerrainBaseMap(option.id)
+      ? "positron"
+      : option.id === "osm" || option.id === "qgis" ? null : option.id;
+    const vectorStatus = vectorId ? openFreeMapStatus[vectorId] : "idle";
+    const subtitle = selected && vectorStatus === "loading"
+      ? "Cargando estilo…"
+      : selected && vectorStatus === "error"
+        ? terrain
+          ? "Relieve sobre OpenStreetMap"
+          : "No disponible · OpenStreetMap activo"
+        : selected && option.id === "qgis" && qgisStatus === "error"
+          ? "Servicio no disponible"
+          : null;
+
+    return (
+      <button
+        key={option.id}
+        type="button"
+        className={`base-map-option base-map-option--${option.id}`}
+        role="radio"
+        aria-checked={selected}
+        aria-label={`${option.title}${subtitle ? ` · ${subtitle}` : ""}`}
+        title={subtitle ?? option.description}
+        onClick={() => changeBaseMap(option.id)}
+      >
+        <span className={`base-map-preview base-map-preview--${option.id}`} aria-hidden="true" />
+        {selected && vectorStatus === "loading" ? (
+          <LoaderCircle className="base-map-loading spinner" size={13} aria-hidden="true" />
+        ) : (
+          <span className={`base-map-indicator ${selected ? "base-map-indicator--active" : ""}`} aria-hidden="true" />
+        )}
+        <span className="base-map-title">{option.title}</span>
+        {subtitle && <span className="base-map-status">{subtitle}</span>}
+      </button>
+    );
+  };
 
   useEffect(() => {
     if (!selectedElement) return;
@@ -481,44 +560,16 @@ export default function App() {
           {panelTab === "layers" && (
             <>
           <section className="layer-section" aria-labelledby="base-layers-title">
-            <h2 className="eyebrow" id="base-layers-title">MAPA BASE</h2>
-            <div className="base-map-options" role="radiogroup" aria-label="Mapa base">
-              {BASE_MAP_OPTIONS.map((option) => {
-                const vectorId: OpenFreeMapId | null = option.id === "topographic"
-                  ? "positron"
-                  : option.id === "osm" || option.id === "qgis" ? null : option.id;
-                const vectorStatus = vectorId ? openFreeMapStatus[vectorId] : "idle";
-                const subtitle = vectorStatus === "loading"
-                  ? "Cargando estilo…"
-                  : vectorStatus === "error"
-                    ? option.id === "topographic"
-                      ? "Relieve sobre OpenStreetMap"
-                      : "No disponible · OpenStreetMap activo"
-                    : option.id === "qgis" && qgisStatus === "error"
-                      ? "Servicio no disponible"
-                      : null;
-                return (
-                  <button
-                    key={option.id}
-                    type="button"
-                    className={`base-map-option base-map-option--${option.id}`}
-                    role="radio"
-                    aria-checked={baseMap === option.id}
-                    aria-label={`${option.title}${subtitle ? ` · ${subtitle}` : ""}`}
-                    title={subtitle ?? option.description}
-                    onClick={() => changeBaseMap(option.id)}
-                  >
-                    <span className={`base-map-preview base-map-preview--${option.id}`} aria-hidden="true" />
-                    {baseMap === option.id && vectorStatus === "loading" ? (
-                      <LoaderCircle className="base-map-loading spinner" size={13} aria-hidden="true" />
-                    ) : (
-                      <span className={`base-map-indicator ${baseMap === option.id ? "base-map-indicator--active" : ""}`} aria-hidden="true" />
-                    )}
-                    <span className="base-map-title">{option.id === "osm" ? "OSM" : option.title}</span>
-                    {subtitle && <span className="base-map-status">{subtitle}</span>}
-                  </button>
-                );
-              })}
+            <h2 className="eyebrow" id="base-layers-title">MAPAS</h2>
+            <div className="base-map-selector" role="radiogroup" aria-label="Mapa base">
+              <span className="base-map-group-title">Mapas base</span>
+              <div className="base-map-options">
+                {BASE_MAP_OPTIONS.map(renderBaseMapOption)}
+              </div>
+              <span className="base-map-group-title base-map-group-title--terrain">Mapas topográficos</span>
+              <div className="base-map-options base-map-options--terrain">
+                {TERRAIN_MAP_OPTIONS.map(renderBaseMapOption)}
+              </div>
             </div>
           </section>
 
@@ -548,26 +599,13 @@ export default function App() {
             </div>
           </details>
 
-          {baseMap === "topographic" && <details className="panel-group topography-section" open>
+          {isTerrainBaseMap(baseMap) && <details className="panel-group topography-section" open>
             <summary className="panel-group-summary"><span className="eyebrow" id="topography-title">TOPOGRAFÍA</span></summary>
             <section className="terrain-exploration-controls" aria-label="Topografía del mapa completo">
               <div className="topography-subheading">
-                <strong>Relieve del mapa</strong>
+                <strong>{TERRAIN_BASE_MAPS[baseMap].title}</strong>
                 <span className={`topography-state topography-state--${explorationTerrainStatus}`}>{explorationStatusMessage}</span>
               </div>
-              <label className="exploration-theme-select" htmlFor="exploration-terrain-theme">
-                <span>Representación</span>
-                <select
-                  id="exploration-terrain-theme"
-                  value={explorationTerrainTheme}
-                  onChange={(event) => changeExplorationTerrainTheme(event.currentTarget.value as ExplorationTerrainTheme)}
-                >
-                  <option value="none">Ninguna</option>
-                  <option value="elevation">Elevación</option>
-                  <option value="slope">Pendientes</option>
-                  <option value="aspect">Orientación de laderas</option>
-                </select>
-              </label>
               <div className="topographic-toggle-list">
                 <div className="overlay-layer-row topographic-layer-row exploration-terrain-row">
                   <span className="overlay-symbol topographic-symbol topographic-symbol--hillshade" aria-hidden="true"><Mountain size={16} /></span>
@@ -597,7 +635,7 @@ export default function App() {
                     />
                   </label>
                   <label className="topographic-opacity exploration-terrain-opacity" htmlFor="exploration-theme-opacity">
-                    <span>Intensidad de la representación</span><output htmlFor="exploration-theme-opacity">{explorationThemeOpacity} %</output>
+                    <span>Opacidad de la representación</span><output htmlFor="exploration-theme-opacity">{explorationThemeOpacity} %</output>
                     <input
                       id="exploration-theme-opacity"
                       type="range"
@@ -605,8 +643,8 @@ export default function App() {
                       max="80"
                       step="5"
                       value={explorationThemeOpacity}
-                      onChange={(event) => setExplorationThemeOpacity(Number(event.currentTarget.value))}
-                      aria-label="Intensidad de la representación topográfica"
+                      onChange={(event) => changeExplorationThemeOpacity(selectedTerrainTheme, Number(event.currentTarget.value))}
+                      aria-label={`Opacidad de ${TERRAIN_BASE_MAPS[baseMap].title.toLowerCase()}`}
                     />
                   </label>
                   {explorationTerrainTheme === "elevation" && <>
