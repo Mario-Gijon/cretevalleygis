@@ -1337,6 +1337,100 @@ button {
   font-size: 9px;
 }
 
+.objective-matrix-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.objective-matrix-actions .ui-button--primary,
+.objective-matrix-actions .ui-button--outline {
+  min-height: 31px;
+  padding: 0 9px;
+  border-radius: 8px;
+  font-size: 9px;
+}
+
+.objective-analysis-plan {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 3px 12px;
+  margin: -3px 0 9px;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.comparison-batch-status {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 4px;
+  max-height: 120px;
+  margin: 0 0 9px;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.comparison-batch-status--running,
+.comparison-batch-status--stopping {
+  border-color: color-mix(in srgb, var(--cv-blue) 35%, var(--border));
+  background: color-mix(in srgb, var(--cv-blue) 7%, var(--surface));
+}
+
+.comparison-batch-status--blocked {
+  border-color: color-mix(in srgb, #c98228 45%, var(--border));
+  background: color-mix(in srgb, #f0bd72 9%, var(--surface));
+}
+
+.comparison-batch-status__heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 3px 12px;
+}
+
+.comparison-batch-status__heading strong {
+  font-weight: 620;
+}
+
+.comparison-batch-status__heading > span {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.comparison-batch-status p {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  color: var(--cv-blue);
+}
+
+.app-shell[data-theme="dark"] .comparison-batch-status p {
+  color: #9ac9e8;
+}
+
+.comparison-batch-status ul {
+  display: grid;
+  gap: 3px;
+  margin: 2px 0 0;
+  padding-left: 17px;
+  color: var(--muted);
+}
+
+.comparison-batch-status li strong {
+  color: var(--text);
+}
+
 .comparison-quality-alerts {
   display: flex;
   max-height: 110px;
@@ -3395,6 +3489,22 @@ button {
   .objective-matrix-table td {
     min-width: 150px;
     padding: 8px;
+  }
+
+  .objective-matrix-heading {
+    align-items: center;
+  }
+
+  .objective-matrix-actions .ui-button--primary,
+  .objective-matrix-actions .ui-button--outline {
+    min-height: 30px;
+    padding: 0 7px;
+    font-size: 8px;
+  }
+
+  .comparison-batch-status {
+    max-height: 95px;
+    font-size: 8px;
   }
 
   .objective-comparison-footnote {

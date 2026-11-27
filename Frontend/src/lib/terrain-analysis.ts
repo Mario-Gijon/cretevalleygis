@@ -118,7 +118,31 @@ export type AreaAnalysisState = {
   stage?: string;
   message: string;
   analysisId?: string;
+  reused?: boolean;
   retryMode?: "submit" | "resume";
   errorCode?: string;
   result?: TerrainAnalysisResultResponse;
+};
+
+export type TerrainAnalysisBatchPhase = "running" | "stopping" | "stopped" | "blocked" | "completed";
+
+export type TerrainAnalysisBatchError = {
+  areaId: string;
+  areaName: string;
+  message: string;
+};
+
+export type TerrainAnalysisBatchState = {
+  phase: TerrainAnalysisBatchPhase;
+  areaIds: string[];
+  criterionIds: string[];
+  selectedAreaCount: number;
+  reusableCount: number;
+  totalWorkCount: number;
+  finishedCount: number;
+  currentAreaId?: string;
+  currentAreaName?: string;
+  currentStage?: string;
+  errors: TerrainAnalysisBatchError[];
+  message: string;
 };

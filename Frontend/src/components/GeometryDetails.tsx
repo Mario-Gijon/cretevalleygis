@@ -9,13 +9,14 @@ import { formatArea, formatCoordinate, formatDistance } from "@/lib/geometry-met
 type GeometryDetailsProps = {
   element: SelectedElementInfo;
   analysis?: AreaAnalysisState;
+  batchBusy?: boolean;
   onBackToList: () => void;
   onAnalyzeArea: () => void;
   onResumeAnalysis: () => void;
   onRename: (id: string, name: string) => void;
 };
 
-export function GeometryDetails({ element, analysis, onBackToList, onAnalyzeArea, onResumeAnalysis, onRename }: GeometryDetailsProps) {
+export function GeometryDetails({ element, analysis, batchBusy = false, onBackToList, onAnalyzeArea, onResumeAnalysis, onRename }: GeometryDetailsProps) {
   const [name, setName] = useState(element?.name ?? "");
 
   useEffect(() => setName(element?.name ?? ""), [element?.id, element?.name]);
@@ -77,6 +78,7 @@ export function GeometryDetails({ element, analysis, onBackToList, onAnalyzeArea
             state: "idle",
             message: "La geometría ha cambiado. Analiza de nuevo esta área para actualizar sus resultados.",
           } : undefined}
+          batchBusy={batchBusy}
           onAnalyze={onAnalyzeArea}
           onResume={onResumeAnalysis}
         />

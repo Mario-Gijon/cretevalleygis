@@ -5,6 +5,8 @@ import type {
   TerrainAnalysisGeometry,
   TerrainAnalysisStatusResponse,
   TerrainAnalysisResultResponse,
+  TerrainAnalysisBatchError,
+  TerrainAnalysisBatchState,
 } from "@/lib/terrain-analysis";
 
 type AreaAnalysisStates = Record<string, AreaAnalysisState>;
@@ -87,17 +89,39 @@ function processingFailureMessage(error: TerrainAnalysisStatusResponse["error"])
 
 export function useTerrainAnalysis() {
   const [analyses, setAnalyses] = useState<AreaAnalysisStates>({});
+  const [batchState, setBatchState] = useState<TerrainAnalysisBatchState | null>(null);
   const analysesRef = useRef<AreaAnalysisStates>({});
   const geometryRevisionsRef = useRef(new Map<string, number>());
   const requestVersionsRef = useRef(new Map<string, number>());
   const controllersRef = useRef(new Map<string, AbortController>());
+  const areaOperationsRef = useRef(new Map<string, Promise<void>>());
+  const operationNamesRef = useRef(new Map<string, { name: string; geometryRevision: number }>());
+  const operationQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const batchStateRef = useRef<TerrainAnalysisBatchState | null>(null);
+  const batchTaskRef = useRef<Promise<void> | null>(null);
+  const batchActiveRef = useRef(false);
+  const stopBatchRequestedRef = useRef(false);
+
+  const publishBatchState = useCallback((next: TerrainAnalysisBatchState | null) => {
+    batchStateRef.current = next;
+    setBatchState(next);
+  }, []);
+
+  const updateBatchState = useCallback((update: Partial<TerrainAnalysisBatchState>) => {
+    const current = batchStateRef.current;
+    if (!current) return;
+    publishBatchState({ ...current, ...update });
+  }, [publishBatchState]);
 
   const updateAnalysis = useCallback((areaId: string, version: number, state: AreaAnalysisState) => {
     if (requestVersionsRef.current.get(areaId) !== version) return;
     const updated = { ...analysesRef.current, [areaId]: state };
     analysesRef.current = updated;
     setAnalyses(updated);
-  }, []);
+    if (batchStateRef.current?.currentAreaId === areaId && (state.state === "submitting" || state.state === "running")) {
+      updateBatchState({ currentStage: state.stage ?? state.message });
+    }
+  }, [updateBatchState]);
 
   const startOperation = useCallback((areaId: string) => {
     controllersRef.current.get(areaId)?.abort();
@@ -110,6 +134,35 @@ export function useTerrainAnalysis() {
 
   const finishOperation = useCallback((areaId: string, controller: AbortController) => {
     if (controllersRef.current.get(areaId) === controller) controllersRef.current.delete(areaId);
+  }, []);
+
+  const queueAreaOperation = useCallback((
+    areaId: string,
+    areaName: string,
+    geometryRevision: number,
+    run: () => Promise<void>,
+    source: "individual" | "batch",
+  ): Promise<void> => {
+    const existing = areaOperationsRef.current.get(areaId);
+    if (existing) return existing;
+    if (batchActiveRef.current && source === "individual") return Promise.resolve();
+
+    operationNamesRef.current.set(areaId, { name: areaName, geometryRevision });
+    const operation = operationQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (geometryRevisionsRef.current.get(areaId) !== geometryRevision) return;
+        await run();
+      });
+    areaOperationsRef.current.set(areaId, operation);
+    operationQueueRef.current = operation.then(() => undefined, () => undefined);
+    void operation.then(() => {
+      if (areaOperationsRef.current.get(areaId) === operation) {
+        areaOperationsRef.current.delete(areaId);
+        operationNamesRef.current.delete(areaId);
+      }
+    });
+    return operation;
   }, []);
 
   const syncAreas = useCallback((elements: DrawnElement[]) => {
@@ -183,6 +236,7 @@ export function useTerrainAnalysis() {
       geometryRevision,
       state: "completed",
       analysisId,
+      reused: body.reused,
       stage: "Completado",
       message: body.data_status === "no_valid_data"
         ? "Análisis completado · sin datos válidos en esta zona."
@@ -266,7 +320,7 @@ export function useTerrainAnalysis() {
     }
   }, [finishWithResult, updateAnalysis]);
 
-  const analyzeArea = useCallback(async (
+  const submitArea = useCallback(async (
     areaId: string,
     areaName: string,
     geometryRevision: number,
@@ -341,9 +395,9 @@ export function useTerrainAnalysis() {
     }
   }, [finishOperation, finishWithResult, pollAnalysis, startOperation, updateAnalysis]);
 
-  const resumeAnalysis = useCallback(async (areaId: string) => {
+  const resumeArea = useCallback(async (areaId: string) => {
     const current = analysesRef.current[areaId];
-    if (current?.state !== "tracking-error" || !current.analysisId) return;
+    if (!current?.analysisId || !["tracking-error", "running"].includes(current.state)) return;
     const { version, controller } = startOperation(areaId);
     updateAnalysis(areaId, version, {
       ...current,
@@ -358,10 +412,284 @@ export function useTerrainAnalysis() {
     }
   }, [finishOperation, pollAnalysis, startOperation, updateAnalysis]);
 
+  const analyzeArea = useCallback((
+    areaId: string,
+    areaName: string,
+    geometryRevision: number,
+    geometry: TerrainAnalysisGeometry,
+  ): Promise<void> => {
+    if (geometryRevisionsRef.current.get(areaId) !== geometryRevision) return Promise.resolve();
+    const existing = areaOperationsRef.current.get(areaId);
+    if (existing) return existing;
+    const current = analysesRef.current[areaId];
+    if (current?.geometryRevision === geometryRevision && current.state === "completed" && current.result) return Promise.resolve();
+
+    return queueAreaOperation(areaId, areaName, geometryRevision, async () => {
+      const latest = analysesRef.current[areaId];
+      if (latest?.geometryRevision === geometryRevision && latest.state === "completed" && latest.result) return;
+      if (latest?.geometryRevision === geometryRevision && (latest.state === "tracking-error" || latest.state === "running") && latest.analysisId) {
+        await resumeArea(areaId);
+        return;
+      }
+      await submitArea(areaId, areaName, geometryRevision, geometry);
+    }, "individual");
+  }, [queueAreaOperation, resumeArea, submitArea]);
+
+  const resumeAnalysis = useCallback((areaId: string, areaName = "Área"): Promise<void> => {
+    const existing = areaOperationsRef.current.get(areaId);
+    if (existing) return existing;
+    const current = analysesRef.current[areaId];
+    if (current?.state !== "tracking-error" || !current.analysisId) return Promise.resolve();
+    return queueAreaOperation(areaId, areaName, current.geometryRevision, () => resumeArea(areaId), "individual");
+  }, [queueAreaOperation, resumeArea]);
+
+  const runAnalysisBatch = useCallback((
+    selectedAreas: DrawnElement[],
+    criterionIds: string[],
+    needsTerrainAnalysis: boolean,
+  ): Promise<void> => {
+    if (batchTaskRef.current) return batchTaskRef.current;
+
+    const snapshot = selectedAreas
+      .filter((area) => area.geometryType === "Polygon" && area.geoJsonGeometry)
+      .map((area) => ({
+        id: area.id,
+        name: area.name,
+        geometryType: area.geometryType,
+        geometryRevision: area.geometryRevision,
+        geometry: JSON.parse(JSON.stringify(area.geoJsonGeometry)) as TerrainAnalysisGeometry,
+      }));
+    const areaIds = snapshot.map((area) => area.id);
+    const initialReusableCount = needsTerrainAnalysis
+      ? snapshot.filter((area) => {
+          const analysis = analysesRef.current[area.id];
+          return analysis?.geometryRevision === area.geometryRevision && analysis.state === "completed" && analysis.result !== undefined;
+        }).length
+      : 0;
+    const initialWorkCount = needsTerrainAnalysis ? snapshot.length - initialReusableCount : 0;
+
+    stopBatchRequestedRef.current = false;
+    batchActiveRef.current = true;
+    publishBatchState({
+      phase: "running",
+      areaIds,
+      criterionIds: [...criterionIds],
+      selectedAreaCount: snapshot.length,
+      reusableCount: initialReusableCount,
+      totalWorkCount: initialWorkCount,
+      finishedCount: 0,
+      errors: [],
+      message: !needsTerrainAnalysis
+        ? "Los criterios seleccionados se obtienen de la geometría; no necesitan análisis del terreno."
+        : initialWorkCount === 0
+          ? "Los resultados seleccionados están vigentes; no se requiere procesamiento adicional."
+          : "El cálculo ejecutará los análisis de uno en uno.",
+    });
+
+    const run = async () => {
+      if (!needsTerrainAnalysis) {
+        updateBatchState({ phase: "completed" });
+        return;
+      }
+      if (snapshot.length === 0) {
+        updateBatchState({ phase: "completed", message: "Selecciona al menos un área para calcular sus criterios." });
+        return;
+      }
+
+      // A lost tracker may still represent the server's one active heavy job.
+      // Resolve it explicitly before submitting work for any other area.
+      const unresolved = Object.entries(analysesRef.current).find(([id, analysis]) => (
+        !areaIds.includes(id) && (
+          (analysis.state === "tracking-error" && analysis.analysisId !== undefined)
+          || (analysis.state === "error" && (analysis.errorCode === "processing_busy" || analysis.errorCode === "backend_unavailable") && !analysis.analysisId)
+        )
+      ));
+      if (unresolved) {
+        const metadata = operationNamesRef.current.get(unresolved[0]);
+        const areaName = metadata?.name ?? "otra área";
+        updateBatchState({
+          phase: "blocked",
+          currentAreaId: undefined,
+          currentAreaName: undefined,
+          currentStage: undefined,
+          message: `Hay un seguimiento sin resolver en ${areaName}. Reanúdalo o vuelve a intentar su análisis antes de calcular otras áreas.`,
+        });
+        return;
+      }
+
+      const existingOperations = [...areaOperationsRef.current.entries()];
+      for (const [areaId, operation] of existingOperations) {
+        const metadata = operationNamesRef.current.get(areaId);
+        updateBatchState({
+          currentAreaId: areaId,
+          currentAreaName: metadata?.name ?? "Otra área",
+          currentStage: "Esperando a que termine el proceso en curso…",
+        });
+        await operation;
+        const result = analysesRef.current[areaId];
+        if (result?.state === "tracking-error" || (result?.state === "error" && !result.analysisId && result.errorCode !== "invalid_geometry" && result.errorCode !== "area_too_large")) {
+          updateBatchState({
+            phase: "blocked",
+            currentAreaId: undefined,
+            currentAreaName: undefined,
+            currentStage: undefined,
+            message: result.message || "No se puede confirmar si el proceso en curso terminó. Reanuda su seguimiento antes de continuar.",
+          });
+          return;
+        }
+      }
+
+      const currentResults = snapshot.filter((area) => {
+        const analysis = analysesRef.current[area.id];
+        return geometryRevisionsRef.current.get(area.id) === area.geometryRevision
+          && analysis?.geometryRevision === area.geometryRevision
+          && analysis.state === "completed"
+          && analysis.result !== undefined;
+      }).length;
+      const workCount = snapshot.length - currentResults;
+      updateBatchState({
+        reusableCount: currentResults,
+        totalWorkCount: workCount,
+        finishedCount: 0,
+        currentAreaId: undefined,
+        currentAreaName: undefined,
+        currentStage: undefined,
+        message: workCount === 0
+          ? "Los resultados seleccionados están vigentes; no se requiere procesamiento adicional."
+          : "El cálculo ejecutará los análisis de uno en uno.",
+      });
+
+      let finishedCount = 0;
+      let reusableCount = currentResults;
+      const errors: TerrainAnalysisBatchError[] = [];
+      let blocked = false;
+
+      for (const area of snapshot) {
+        if (stopBatchRequestedRef.current) break;
+        const currentRevision = geometryRevisionsRef.current.get(area.id);
+        if (currentRevision !== area.geometryRevision) {
+          errors.push({ areaId: area.id, areaName: area.name, message: "La geometría cambió durante el cálculo; se omitió este resultado." });
+          finishedCount += 1;
+          updateBatchState({ finishedCount, errors: [...errors] });
+          continue;
+        }
+
+        const current = analysesRef.current[area.id];
+        if (current?.geometryRevision === area.geometryRevision && current.state === "completed" && current.result) continue;
+
+        updateBatchState({
+          currentAreaId: area.id,
+          currentAreaName: area.name,
+          currentStage: current?.stage ?? "Preparando análisis…",
+        });
+
+        await queueAreaOperation(area.id, area.name, area.geometryRevision, async () => {
+          const latest = analysesRef.current[area.id];
+          if (geometryRevisionsRef.current.get(area.id) !== area.geometryRevision) return;
+          if (latest?.geometryRevision === area.geometryRevision && latest.state === "completed" && latest.result) return;
+          if (latest?.geometryRevision === area.geometryRevision && latest.state === "tracking-error" && latest.analysisId) {
+            await resumeArea(area.id);
+            return;
+          }
+          if (latest?.geometryRevision === area.geometryRevision && latest.state === "running" && latest.analysisId) {
+            await resumeArea(area.id);
+            return;
+          }
+          await submitArea(area.id, area.name, area.geometryRevision, area.geometry);
+        }, "batch");
+
+        const result = analysesRef.current[area.id];
+        if (geometryRevisionsRef.current.get(area.id) !== area.geometryRevision || result?.state === "invalidated") {
+          errors.push({ areaId: area.id, areaName: area.name, message: "La geometría cambió o se eliminó durante el cálculo; no se utilizó el resultado anterior." });
+          finishedCount += 1;
+          updateBatchState({ finishedCount, errors: [...errors] });
+          continue;
+        }
+        if (result?.geometryRevision === area.geometryRevision && result.state === "completed" && result.result) {
+          if (result.reused) reusableCount += 1;
+          finishedCount += 1;
+          updateBatchState({ finishedCount, reusableCount });
+          continue;
+        }
+
+        const message = result?.message ?? "No se pudo completar este análisis.";
+        errors.push({ areaId: area.id, areaName: area.name, message });
+        finishedCount += 1;
+        updateBatchState({ finishedCount, errors: [...errors] });
+        if (result?.state === "tracking-error" || (result?.state === "error" && !result.analysisId && result.errorCode !== "invalid_geometry" && result.errorCode !== "area_too_large")) {
+          blocked = true;
+          break;
+        }
+      }
+
+      if (blocked) {
+        updateBatchState({
+          phase: "blocked",
+          currentAreaId: undefined,
+          currentAreaName: undefined,
+          currentStage: undefined,
+          errors,
+          message: "El seguimiento del trabajo actual no está confirmado. Reanúdalo antes de iniciar el siguiente análisis.",
+        });
+      } else if (stopBatchRequestedRef.current) {
+        updateBatchState({
+          phase: "stopped",
+          currentAreaId: undefined,
+          currentAreaName: undefined,
+          currentStage: undefined,
+          errors,
+          message: "Se detuvo el lanzamiento de nuevos análisis. El trabajo que ya estaba activo terminó y conserva su resultado.",
+        });
+      } else {
+        updateBatchState({
+          phase: "completed",
+          currentAreaId: undefined,
+          currentAreaName: undefined,
+          currentStage: undefined,
+          errors,
+          message: errors.length > 0
+            ? `Cálculo terminado con ${errors.length} área${errors.length === 1 ? "" : "s"} pendiente${errors.length === 1 ? "" : "s"} de resolver.`
+            : workCount === 0
+              ? "Los resultados seleccionados están vigentes; no se requiere procesamiento adicional."
+              : "Todos los análisis de la selección han terminado.",
+        });
+      }
+    };
+
+    const task = run().catch(() => {
+      updateBatchState({
+        phase: "blocked",
+        currentAreaId: undefined,
+        currentAreaName: undefined,
+        currentStage: undefined,
+        message: "Se interrumpió la coordinación. Revisa el estado de las áreas antes de continuar.",
+      });
+    }).finally(() => {
+      batchActiveRef.current = false;
+      batchTaskRef.current = null;
+    });
+    batchTaskRef.current = task;
+    return task;
+  }, [publishBatchState, queueAreaOperation, resumeArea, submitArea, updateBatchState]);
+
+  const stopAnalysisBatch = useCallback(() => {
+    if (!batchActiveRef.current || stopBatchRequestedRef.current) return;
+    stopBatchRequestedRef.current = true;
+    updateBatchState({ phase: "stopping", message: "El análisis activo terminará; no se iniciarán las siguientes áreas." });
+  }, [updateBatchState]);
+
   useEffect(() => () => {
     for (const controller of controllersRef.current.values()) controller.abort();
     controllersRef.current.clear();
   }, []);
 
-  return { analyses, analyzeArea, resumeAnalysis, syncAreas };
+  return {
+    analyses,
+    analyzeArea,
+    resumeAnalysis,
+    syncAreas,
+    batchState,
+    runAnalysisBatch,
+    stopAnalysisBatch,
+  };
 }

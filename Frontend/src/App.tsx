@@ -762,6 +762,7 @@ export default function App() {
           /> : <GeometryDetails
             element={selectedElement}
             analysis={terrainAnalysis.analyses[selectedElement.id]}
+            batchBusy={terrainAnalysis.batchState?.phase === "running" || terrainAnalysis.batchState?.phase === "stopping"}
             onBackToList={() => setAreaPanelView("list")}
             onAnalyzeArea={() => {
               if (selectedElement.geometry.kind !== "Polygon" || !selectedElement.geoJsonGeometry) return;
@@ -772,7 +773,7 @@ export default function App() {
                 selectedElement.geoJsonGeometry,
               );
             }}
-            onResumeAnalysis={() => { void terrainAnalysis.resumeAnalysis(selectedElement.id); }}
+            onResumeAnalysis={() => { void terrainAnalysis.resumeAnalysis(selectedElement.id, selectedElement.name); }}
             onRename={drawingTools.renameElement}
           />)}
           </div>
@@ -965,6 +966,7 @@ export default function App() {
       {comparisonOpen && <ObjectiveAreaComparison
         areas={polygonElements}
         analyses={terrainAnalysis.analyses}
+        batchState={terrainAnalysis.batchState}
         selectedAreaIds={comparisonAreaIds ?? polygonElements.slice(0, 2).map((element) => element.id)}
         onSelectedAreaIdsChange={setComparisonAreaIds}
         selectedCriterionIds={comparisonCriterionIds}
@@ -974,6 +976,10 @@ export default function App() {
           setComparisonOpen(false);
           openAreaDetails(areaId);
         }}
+        onCalculate={(areas, criterionIds, needsTerrainAnalysis) => {
+          void terrainAnalysis.runAnalysisBatch(areas, criterionIds, needsTerrainAnalysis);
+        }}
+        onStopCalculation={terrainAnalysis.stopAnalysisBatch}
       />}
     </div>
   );

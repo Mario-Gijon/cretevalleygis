@@ -13,6 +13,7 @@ import type { AreaAnalysisState, TerrainAnalysisResultResponse, TerrainVariableA
 
 type TerrainAnalysisPanelProps = {
   analysis?: AreaAnalysisState;
+  batchBusy?: boolean;
   onAnalyze: () => void;
   onResume: () => void;
 };
@@ -225,10 +226,10 @@ function Results({ result }: { result: TerrainAnalysisResultResponse }) {
   );
 }
 
-export function TerrainAnalysisPanel({ analysis, onAnalyze, onResume }: TerrainAnalysisPanelProps) {
+export function TerrainAnalysisPanel({ analysis, batchBusy = false, onAnalyze, onResume }: TerrainAnalysisPanelProps) {
   const busy = analysis?.state === "submitting" || analysis?.state === "running";
-  const canAnalyze = !analysis || analysis.state === "idle" || analysis.state === "invalidated" || (analysis.state === "error" && analysis.retryMode === "submit");
-  const canResume = analysis?.state === "tracking-error" && analysis.retryMode === "resume";
+  const canAnalyze = !batchBusy && (!analysis || analysis.state === "idle" || analysis.state === "invalidated" || (analysis.state === "error" && analysis.retryMode === "submit"));
+  const canResume = !batchBusy && analysis?.state === "tracking-error" && analysis.retryMode === "resume";
 
   return (
     <section className="area-analysis-panel" aria-labelledby="area-analysis-title">
@@ -249,6 +250,10 @@ export function TerrainAnalysisPanel({ analysis, onAnalyze, onResume }: TerrainA
           <LoaderCircle size={15} className="spinner" aria-hidden="true" />
           <div><strong>{analysis.stage ?? "En curso"}</strong><span>Puedes seguir usando el mapa.</span></div>
         </div>
+      )}
+
+      {batchBusy && !busy && analysis?.state !== "completed" && (
+        <p className="area-analysis-message" role="status">Otro cálculo de terreno está en curso. Este análisis podrá iniciarse cuando termine.</p>
       )}
 
       {(analysis?.state === "idle" || analysis?.state === "invalidated") && analysis.message && <p className="area-analysis-message">{analysis.message}</p>}

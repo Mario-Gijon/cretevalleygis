@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
-import { AlertCircle, ArrowUpRight, LoaderCircle, X } from "lucide-react";
+import { AlertCircle, ArrowUpRight, LoaderCircle, Play, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatTerrainAnalysisWarning } from "@/components/TerrainAnalysisPanel";
 import type { DrawnElement } from "@/hooks/useDrawingTools";
-import type { AreaAnalysisState, TerrainVariableAnalysis } from "@/lib/terrain-analysis";
+import type { AreaAnalysisState, TerrainAnalysisBatchState, TerrainVariableAnalysis } from "@/lib/terrain-analysis";
 import {
   analysisStatusLabel,
   buildObjectiveCriterionCell,
@@ -16,12 +16,15 @@ import {
 type ObjectiveAreaComparisonProps = {
   areas: DrawnElement[];
   analyses: Record<string, AreaAnalysisState>;
+  batchState: TerrainAnalysisBatchState | null;
   selectedAreaIds: string[];
   onSelectedAreaIdsChange: (ids: string[]) => void;
   selectedCriterionIds: string[];
   onSelectedCriterionIdsChange: (ids: string[]) => void;
   onClose: () => void;
   onOpenArea: (areaId: string) => void;
+  onCalculate: (areas: DrawnElement[], criterionIds: string[], needsTerrainAnalysis: boolean) => void;
+  onStopCalculation: () => void;
 };
 
 const valueFormat = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2 });
@@ -91,6 +94,23 @@ function AnalysisStatus({ area, analysis }: { area: DrawnElement; analysis?: Are
   );
 }
 
+function analysisStageLabel(stage: string | undefined): string {
+  if (!stage) return "En curso";
+  const stages: Record<string, string> = {
+    queued: "En cola",
+    checking_data: "Comprobando datos",
+    preparing_elevation: "Preparando elevación",
+    generating_derivatives: "Preparando pendientes y orientación",
+    calculating_statistics: "Calculando estadísticas",
+    completed: "Completado",
+  };
+  return stages[stage] ?? stage;
+}
+
+function sameValues(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value) => right.includes(value));
+}
+
 function ComparisonCell({ cell }: { cell: ReturnType<typeof buildObjectiveCriterionCell> }) {
   return (
     <td className={`objective-matrix-cell objective-matrix-cell--${cell.status}`}>
@@ -110,12 +130,15 @@ function ComparisonCell({ cell }: { cell: ReturnType<typeof buildObjectiveCriter
 export function ObjectiveAreaComparison({
   areas,
   analyses,
+  batchState,
   selectedAreaIds,
   onSelectedAreaIdsChange,
   selectedCriterionIds,
   onSelectedCriterionIdsChange,
   onClose,
   onOpenArea,
+  onCalculate,
+  onStopCalculation,
 }: ObjectiveAreaComparisonProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -128,6 +151,37 @@ export function ObjectiveAreaComparison({
     [selectedCriterionIds],
   );
   const qualityNotes = useMemo(() => collectQualityNotes(selectedAreas, analyses), [selectedAreas, analyses]);
+  const needsTerrainAnalysis = selectedCriteria.some((criterion) => criterion.dependencies.length > 0);
+  const reusableCount = needsTerrainAnalysis ? selectedAreas.filter((area) => {
+    const analysis = analyses[area.id];
+    return analysis?.geometryRevision === area.geometryRevision && analysis.state === "completed" && analysis.result !== undefined;
+  }).length : 0;
+  const trackedCount = needsTerrainAnalysis ? selectedAreas.filter((area) => {
+    const analysis = analyses[area.id];
+    return analysis?.geometryRevision === area.geometryRevision && (
+      analysis.state === "submitting"
+      || analysis.state === "running"
+      || (analysis.state === "tracking-error" && analysis.analysisId !== undefined)
+    );
+  }).length : 0;
+  const pendingCount = Math.max(0, selectedAreas.length - reusableCount - trackedCount);
+  const terrainWorkCount = Math.max(0, selectedAreas.length - reusableCount);
+  const batchActive = batchState?.phase === "running" || batchState?.phase === "stopping";
+  const batchMatchesSelection = Boolean(batchState
+    && sameValues(batchState.areaIds, selectedAreaIds)
+    && sameValues(batchState.criterionIds, selectedCriterionIds));
+  const showBatchState = Boolean(batchState && (batchActive || batchMatchesSelection));
+  const calculationButtonLabel = !needsTerrainAnalysis
+    ? "Solo geometría"
+    : terrainWorkCount === 0
+      ? "Resultados vigentes"
+      : batchState?.phase === "stopped"
+        ? "Continuar cálculo"
+        : batchState?.phase === "blocked"
+          ? "Reanudar cálculo"
+          : batchState?.phase === "completed" && batchState.errors.length > 0
+            ? "Reintentar pendientes"
+            : "Calcular criterios";
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -200,7 +254,7 @@ export function ObjectiveAreaComparison({
                   return (
                     <li className="comparison-area-option" key={area.id}>
                       <label>
-                        <input type="checkbox" checked={selectedAreaIds.includes(area.id)} onChange={() => toggleArea(area.id)} />
+                        <input type="checkbox" checked={selectedAreaIds.includes(area.id)} disabled={batchActive} onChange={() => toggleArea(area.id)} />
                         <span className="comparison-area-option__copy">
                           <strong>{area.name}</strong>
                           <AnalysisStatus area={area} analysis={analyses[area.id]} />
@@ -226,8 +280,8 @@ export function ObjectiveAreaComparison({
                 <span>{selectedCriteria.length}</span>
               </div>
               <div className="comparison-criteria-actions">
-                <button type="button" onClick={() => onSelectedCriterionIdsChange(allCriterionIds)}>Seleccionar todos</button>
-                <button type="button" onClick={() => onSelectedCriterionIdsChange([])}>Limpiar</button>
+                <button type="button" disabled={batchActive} onClick={() => onSelectedCriterionIdsChange(allCriterionIds)}>Seleccionar todos</button>
+                <button type="button" disabled={batchActive} onClick={() => onSelectedCriterionIdsChange([])}>Limpiar</button>
               </div>
               <div className="comparison-criteria-groups">
                 {OBJECTIVE_CRITERION_CATEGORIES.map((category) => {
@@ -240,12 +294,12 @@ export function ObjectiveAreaComparison({
                         <span>{category.name}</span><small>{categorySelectedCount}/{categoryCriteria.length}</small>
                       </summary>
                       <div className="comparison-criterion-group__actions">
-                        <button type="button" onClick={() => toggleCategory(categoryIds, true)}>Todos</button>
-                        <button type="button" onClick={() => toggleCategory(categoryIds, false)}>Ninguno</button>
+                        <button type="button" disabled={batchActive} onClick={() => toggleCategory(categoryIds, true)}>Todos</button>
+                        <button type="button" disabled={batchActive} onClick={() => toggleCategory(categoryIds, false)}>Ninguno</button>
                       </div>
                       {categoryCriteria.map((criterion) => (
                         <label className="comparison-criterion-option" key={criterion.id} title={criterion.description}>
-                          <input type="checkbox" checked={selectedCriterionIds.includes(criterion.id)} onChange={() => toggleCriterion(criterion.id)} />
+                          <input type="checkbox" checked={selectedCriterionIds.includes(criterion.id)} disabled={batchActive} onChange={() => toggleCriterion(criterion.id)} />
                           <span>{criterion.name}</span>
                         </label>
                       ))}
@@ -262,8 +316,49 @@ export function ObjectiveAreaComparison({
                 <h3>Matriz comparativa</h3>
                 <p>{selectedAreas.length} {selectedAreas.length === 1 ? "área" : "áreas"} · {selectedCriteria.length} {selectedCriteria.length === 1 ? "criterio" : "criterios"}</p>
               </div>
-              {selectedAreaIds.length < 2 && selectedAreaIds.length > 0 && <span>Selecciona otra área para comparar.</span>}
+              <div className="objective-matrix-actions">
+                {batchActive ? (
+                  <Button variant="outline" size="small" disabled={batchState?.phase === "stopping"} onClick={onStopCalculation}>
+                    <Square size={13} aria-hidden="true" /> {batchState?.phase === "stopping" ? "Deteniendo…" : "Detener siguientes"}
+                  </Button>
+                ) : (
+                  <Button
+                    variant="primary"
+                    size="small"
+                    disabled={!needsTerrainAnalysis || selectedAreas.length === 0 || selectedCriteria.length === 0 || terrainWorkCount === 0}
+                    onClick={() => onCalculate(selectedAreas, selectedCriterionIds, needsTerrainAnalysis)}
+                  >
+                    <Play size={13} aria-hidden="true" /> {calculationButtonLabel}
+                  </Button>
+                )}
+              </div>
             </div>
+
+            <div className="objective-analysis-plan" aria-live="polite">
+              {!needsTerrainAnalysis ? (
+                <span>Los criterios seleccionados se calculan con la geometría y no necesitan análisis del terreno.</span>
+              ) : (
+                <span>{selectedAreas.length} áreas · {reusableCount} resultados reutilizables · {trackedCount} en curso · {pendingCount} pendientes</span>
+              )}
+              {batchActive && <span>La selección permanece fija mientras se calcula.</span>}
+            </div>
+
+            {showBatchState && batchState && (
+              <section className={`comparison-batch-status comparison-batch-status--${batchState.phase}`} role="status" aria-live="polite">
+                <div className="comparison-batch-status__heading">
+                  <strong>{batchState.message}</strong>
+                  {batchState.phase === "running" || batchState.phase === "stopping"
+                    ? <span>{batchState.finishedCount} de {batchState.totalWorkCount} análisis terminados · {batchState.reusableCount} reutilizables</span>
+                    : null}
+                </div>
+                {batchState.currentAreaName && (
+                  <p><LoaderCircle size={13} className="spinner" aria-hidden="true" /> {batchState.currentAreaName} · {analysisStageLabel(batchState.currentStage)}</p>
+                )}
+                {batchState.errors.length > 0 && (
+                  <ul>{batchState.errors.map((error) => <li key={error.areaId}><strong>{error.areaName}:</strong> {error.message}</li>)}</ul>
+                )}
+              </section>
+            )}
 
             {qualityNotes.length > 0 && (
               <aside className="comparison-quality-alerts" aria-label="Advertencias de calidad de los datos">
