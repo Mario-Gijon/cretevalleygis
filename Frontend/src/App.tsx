@@ -107,15 +107,15 @@ const TOPOGRAPHIC_LAYER_OPTIONS = [
 ] as const;
 
 function explorationTerrainStatusMessage(status: ExplorationTerrainStatus, zoom: number): string {
-  if (status === "disabled") return "Relieve y elevación de exploración desactivados.";
-  if (status === "scale") return `Disponible al acercar a zoom ${EXPLORATION_TERRAIN.overlayMinZoom}. No se solicitan teselas por debajo de esa escala.`;
-  if (status === "loading") return "Cargando teselas de relieve para esta vista…";
-  if (status === "active") return "Topografía de exploración activa.";
-  if (status === "overzoom") return `Activo hasta zoom ${EXPLORATION_TERRAIN.maxDataZoom}; ampliar más no añade detalle del terreno.`;
-  if (status === "regional-priority") return "En pausa mientras se muestra topografía de un área preparada.";
-  if (status === "unavailable") return "WebGL no está disponible; el mapa base y las herramientas siguen funcionando.";
-  if (status === "error") return "No se pudieron cargar algunas teselas; el mapa base sigue disponible.";
-  return `Zoom actual ${zoom.toLocaleString("es-ES", { maximumFractionDigits: 1 })}.`;
+  if (status === "disabled") return "Relieve desactivado.";
+  if (status === "scale") return "Acércate para mostrar el relieve.";
+  if (status === "loading") return "Cargando relieve…";
+  if (status === "active") return "Relieve activo.";
+  if (status === "overzoom") return "Mostrando el detalle máximo disponible.";
+  if (status === "regional-priority") return "El terreno preparado tiene prioridad.";
+  if (status === "unavailable") return "El relieve no está disponible en este navegador.";
+  if (status === "error") return "No se pudieron cargar algunas teselas.";
+  return `Relieve disponible · zoom ${zoom.toLocaleString("es-ES", { maximumFractionDigits: 1 })}.`;
 }
 
 function elevationGradient(
@@ -482,11 +482,6 @@ export default function App() {
   const visibleExplorationRequestedMode = topographicBasemapActive ? "absolute" : visibleExplorationScale.requestedMode;
   const adaptiveScaleFallback = visibleExplorationScale.requestedMode === "adaptive"
     && visibleExplorationScale.effectiveMode !== "adaptive";
-  const explorationScaleMessage = visibleExplorationScale.requestedMode === "absolute"
-    ? "Escala absoluta fija; los colores son comparables entre regiones."
-    : adaptiveScaleFallback
-      ? "Muestra insuficiente; se mantiene la escala absoluta. Recalcula tras cargar más teselas."
-      : `Rango adaptativo fijado: ${formatElevation(visibleExplorationScale.minM)}–${formatElevation(visibleExplorationScale.maxM)} m. Recalcula tras cambiar de región; los colores no son comparables entre vistas.`;
   const regionalElevationGradient = regionalElevationStyle
     ? `linear-gradient(90deg, ${regionalElevationStyle.stops.map((stop) => (
       `${stop.color} ${(stop.position * 100).toFixed(2)}%`
@@ -789,7 +784,7 @@ export default function App() {
                       : "No disponible · OpenStreetMap activo"
                     : option.id === "qgis" && qgisStatus === "error"
                       ? "Servicio no disponible"
-                      : option.description;
+                      : null;
                 return (
                   <button
                     key={option.id}
@@ -797,18 +792,18 @@ export default function App() {
                     className={`base-map-option base-map-option--${option.id}`}
                     role="radio"
                     aria-checked={baseMap === option.id}
+                    aria-label={`${option.title}${subtitle ? ` · ${subtitle}` : ""}`}
+                    title={subtitle ?? option.description}
                     onClick={() => changeBaseMap(option.id)}
                   >
                     <span className={`base-map-preview base-map-preview--${option.id}`} aria-hidden="true" />
-                    <span className="layer-copy">
-                      <span className="layer-title">{option.title}</span>
-                      <span className="layer-subtitle">{subtitle}</span>
-                    </span>
                     {baseMap === option.id && vectorStatus === "loading" ? (
-                      <LoaderCircle className="base-map-loading spinner" size={13} aria-label="Cargando mapa base" />
+                      <LoaderCircle className="base-map-loading spinner" size={13} aria-hidden="true" />
                     ) : (
                       <span className={`base-map-indicator ${baseMap === option.id ? "base-map-indicator--active" : ""}`} aria-hidden="true" />
                     )}
+                    <span className="base-map-title">{option.id === "osm" ? "OSM" : option.title}</span>
+                    {subtitle && <span className="base-map-status">{subtitle}</span>}
                   </button>
                 );
               })}
@@ -817,7 +812,6 @@ export default function App() {
 
           <details className="panel-group thematic-layer-section" open>
             <summary className="panel-group-summary"><span className="eyebrow" id="geographic-layers-title">CAPAS GEOGRÁFICAS</span></summary>
-            <p className="overlay-intro">Límites, lugares y agua.</p>
             <div className="overlay-layer-list">
               {([
                 ["boundaries", ScanLine],
@@ -829,12 +823,8 @@ export default function App() {
                 return (
                   <div className="overlay-layer-row" key={id}>
                     <span className={`overlay-symbol overlay-symbol--${id}`} aria-hidden="true"><Icon size={16} /></span>
-                    <span className="layer-copy">
-                      <span className="layer-title">{layer.title}</span>
-                      <span className="layer-subtitle">
-                        {overlayAvailability[id] ? layer.description : "No disponible en este momento"}
-                      </span>
-                    </span>
+                    <span className="layer-copy"><span className="layer-title">{layer.title}</span></span>
+                    {!overlayAvailability[id] && <span className="layer-unavailable">No disponible</span>}
                     <Switch
                       checked={overlayVisibility[id]}
                       onCheckedChange={(visible) => changeOverlayVisibility(id, visible)}
@@ -848,146 +838,146 @@ export default function App() {
 
           <details className="panel-group topography-section" open>
             <summary className="panel-group-summary"><span className="eyebrow" id="topography-title">TOPOGRAFÍA</span></summary>
-            <details className="terrain-exploration-controls" open>
-              <summary>Topografía del mapa</summary>
-              <p className="overlay-intro">{topographicBasemapActive
-                ? "El mapa base incluye relieve mundial y mantiene la cartografía de referencia."
-                : "Elevación y sombreado para explorar sin preparar un área."}</p>
-              <div className="overlay-layer-row topographic-layer-row exploration-terrain-row">
-                <span className="overlay-symbol topographic-symbol topographic-symbol--hillshade" aria-hidden="true"><Mountain size={16} /></span>
-                <span className="layer-copy">
-                  <span className="layer-title">Relieve sombreado</span>
-                  <span className="layer-subtitle">{topographicBasemapActive ? "Incluido en el mapa base" : "Resalta las formas del terreno"}</span>
-                </span>
+            <section className="terrain-exploration-controls" aria-label="Topografía del mapa completo">
+              <div className="topography-subheading">
+                <strong>Relieve del mapa</strong>
                 {topographicBasemapActive
-                  ? <span className="topographic-layer-included">Activo</span>
-                  : <Switch
-                    checked={explorationTerrainEnabled}
-                    onCheckedChange={changeExplorationTerrainEnabled}
-                    aria-label={`${explorationTerrainEnabled ? "Desactivar" : "Activar"} relieve sombreado`}
-                  />}
+                  ? <span className="topographic-layer-included">Incluido</span>
+                  : <span className={`topography-state topography-state--${explorationTerrainStatus}`}>{explorationStatusMessage}</span>}
               </div>
-              {showExplorationHillshadeControls && (
-                <label className="topographic-opacity exploration-terrain-opacity" htmlFor="exploration-hillshade-opacity">
-                  <span>Intensidad del sombreado</span><output htmlFor="exploration-hillshade-opacity">{explorationTerrainOpacity} %</output>
-                  <input
-                    id="exploration-hillshade-opacity"
-                    type="range"
-                    min="0"
-                    max="75"
-                    step="5"
-                    value={explorationTerrainOpacity}
-                    onChange={(event) => setExplorationTerrainOpacity(Number(event.currentTarget.value))}
-                    aria-label="Intensidad del relieve sombreado"
-                  />
-                </label>
-              )}
-              <div className="overlay-layer-row topographic-layer-row exploration-terrain-row exploration-elevation-row">
-                <span className="overlay-symbol topographic-symbol topographic-symbol--elevation" aria-hidden="true"><Layers size={16} /></span>
-                <span className="layer-copy">
-                  <span className="layer-title">Elevación del terreno</span>
-                  <span className="layer-subtitle">{topographicBasemapActive ? "Incluida · colores absolutos" : "Colores hipsométricos · metros"}</span>
-                </span>
-                {topographicBasemapActive
-                  ? <span className="topographic-layer-included">Activa</span>
-                  : <Switch
-                    checked={explorationElevationEnabled}
-                    onCheckedChange={changeExplorationElevationEnabled}
-                    aria-label={`${explorationElevationEnabled ? "Desactivar" : "Activar"} elevación del terreno`}
-                  />}
-              </div>
-              {showExplorationElevationControls && (
-                <>
-                  <label className="topographic-opacity exploration-terrain-opacity" htmlFor="exploration-elevation-opacity">
-                    <span>Opacidad de elevación</span><output htmlFor="exploration-elevation-opacity">{explorationElevationOpacity} %</output>
-                    <input
-                      id="exploration-elevation-opacity"
-                      type="range"
-                      min="0"
-                      max="80"
-                      step="5"
-                      value={explorationElevationOpacity}
-                      onChange={(event) => setExplorationElevationOpacity(Number(event.currentTarget.value))}
-                      aria-label="Opacidad de elevación"
+              {topographicBasemapActive ? (
+                <p className="topography-inline-note">Elevación y sombreado activos en el mapa base.</p>
+              ) : (
+                <div className="topographic-toggle-list">
+                  <div className="overlay-layer-row topographic-layer-row exploration-terrain-row">
+                    <span className="overlay-symbol topographic-symbol topographic-symbol--hillshade" aria-hidden="true"><Mountain size={16} /></span>
+                    <span className="layer-copy"><span className="layer-title">Relieve sombreado</span></span>
+                    <Switch
+                      checked={explorationTerrainEnabled}
+                      onCheckedChange={changeExplorationTerrainEnabled}
+                      aria-label={`${explorationTerrainEnabled ? "Desactivar" : "Activar"} relieve sombreado`}
                     />
-                  </label>
-                  {topographicBasemapActive ? (
-                    <p className="exploration-elevation-mode-note">Escala absoluta · estable entre regiones</p>
-                  ) : (
-                    <label className="exploration-elevation-mode" htmlFor="exploration-elevation-mode">
-                      <span>Escala de color</span>
-                      <select
-                        id="exploration-elevation-mode"
-                        value={explorationElevationMode}
-                        onChange={(event) => changeExplorationElevationMode(event.currentTarget.value as ExplorationElevationMode)}
-                      >
-                        <option value="adaptive">Adaptativa regional</option>
-                        <option value="absolute">Absoluta · comparable</option>
-                      </select>
+                  </div>
+                  <div className="overlay-layer-row topographic-layer-row exploration-terrain-row exploration-elevation-row">
+                    <span className="overlay-symbol topographic-symbol topographic-symbol--elevation" aria-hidden="true"><Layers size={16} /></span>
+                    <span className="layer-copy"><span className="layer-title">Elevación</span></span>
+                    <Switch
+                      checked={explorationElevationEnabled}
+                      onCheckedChange={changeExplorationElevationEnabled}
+                      aria-label={`${explorationElevationEnabled ? "Desactivar" : "Activar"} elevación del terreno`}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <details className="topography-display-settings">
+                <summary>Ajustes y leyenda</summary>
+                <div className="topography-display-settings__content">
+                  {showExplorationHillshadeControls && (
+                    <label className="topographic-opacity exploration-terrain-opacity" htmlFor="exploration-hillshade-opacity">
+                      <span>Intensidad del relieve</span><output htmlFor="exploration-hillshade-opacity">{explorationTerrainOpacity} %</output>
+                      <input
+                        id="exploration-hillshade-opacity"
+                        type="range"
+                        min="0"
+                        max="75"
+                        step="5"
+                        value={explorationTerrainOpacity}
+                        onChange={(event) => setExplorationTerrainOpacity(Number(event.currentTarget.value))}
+                        aria-label="Intensidad del relieve sombreado"
+                      />
                     </label>
                   )}
-                  <div
-                    className="exploration-elevation-legend"
-                    aria-label={`Leyenda de elevación ${visibleExplorationMode === "adaptive" ? "adaptativa" : "absoluta"} en metros`}
-                  >
-                    <span className="elevation-legend-title">Elevación del mapa · m</span>
-                    <div className="exploration-elevation-legend__bands">
-                      <div className="exploration-elevation-legend__band">
-                        <span>Océano · escala fija</span>
-                        <i style={{ background: oceanExplorationGradient }} aria-hidden="true" />
-                        <div className="exploration-elevation-legend__values"><span>≤ {formatElevation(ABSOLUTE_ELEVATION_MIN_M)} m</span><span>0 m</span></div>
-                      </div>
-                      <div className="exploration-elevation-legend__band">
-                        <div className="exploration-elevation-legend__band-heading">
-                          <span>Terreno · {visibleExplorationMode === "adaptive" ? "adaptativo" : "absoluto"}</span>
-                          {visibleExplorationRequestedMode === "adaptive" && (
-                            <Button
-                              variant="ghost"
-                              size="small"
-                              className="exploration-elevation-refresh"
-                              aria-label="Recalcular escala adaptativa para la vista actual"
-                              title="Recalcular con las teselas de la vista actual"
-                              onClick={() => setExplorationElevationScaleRefresh((revision) => revision + 1)}
-                            >
-                              <RefreshCw size={13} aria-hidden="true" /> Recalcular
-                            </Button>
-                          )}
-                        </div>
-                        <i
-                          style={{ background: visibleExplorationMode === "adaptive" ? adaptiveLandGradient : absoluteLandGradient }}
-                          aria-hidden="true"
+                  {showExplorationElevationControls && (
+                    <>
+                      <label className="topographic-opacity exploration-terrain-opacity" htmlFor="exploration-elevation-opacity">
+                        <span>Intensidad del color</span><output htmlFor="exploration-elevation-opacity">{explorationElevationOpacity} %</output>
+                        <input
+                          id="exploration-elevation-opacity"
+                          type="range"
+                          min="0"
+                          max="80"
+                          step="5"
+                          value={explorationElevationOpacity}
+                          onChange={(event) => setExplorationElevationOpacity(Number(event.currentTarget.value))}
+                          aria-label="Intensidad del color de elevación"
                         />
-                        {visibleExplorationMode === "adaptive" ? (
-                          <div className="exploration-elevation-legend__values"><span>&lt; {formatElevation(visibleExplorationScale.minM)} m</span><span>&gt; {formatElevation(visibleExplorationScale.maxM)} m</span></div>
-                        ) : (
-                          <div className="exploration-elevation-legend__values"><span>0 m</span><span>1 500 m</span><span>≥ {formatElevation(ABSOLUTE_ELEVATION_MAX_M)} m</span></div>
-                        )}
+                      </label>
+                      {topographicBasemapActive ? (
+                        <span className="exploration-elevation-mode-note">Colores absolutos · comparables entre regiones</span>
+                      ) : (
+                        <label className="exploration-elevation-mode" htmlFor="exploration-elevation-mode">
+                          <span>Colores</span>
+                          <select
+                            id="exploration-elevation-mode"
+                            value={explorationElevationMode}
+                            onChange={(event) => changeExplorationElevationMode(event.currentTarget.value as ExplorationElevationMode)}
+                          >
+                            <option value="adaptive">Adaptativos a la región</option>
+                            <option value="absolute">Escala absoluta</option>
+                          </select>
+                        </label>
+                      )}
+                      <div className="exploration-elevation-legend" aria-label={`Leyenda de elevación ${visibleExplorationMode === "adaptive" ? "adaptativa" : "absoluta"} en metros`}>
+                        <span className="elevation-legend-title">Altitud · metros</span>
+                        <div className="exploration-elevation-legend__bands">
+                          <div className="exploration-elevation-legend__band">
+                            <span>Océano</span>
+                            <i style={{ background: oceanExplorationGradient }} aria-hidden="true" />
+                            <div className="exploration-elevation-legend__values"><span>≤ {formatElevation(ABSOLUTE_ELEVATION_MIN_M)} m</span><span>0 m</span></div>
+                          </div>
+                          <div className="exploration-elevation-legend__band">
+                            <div className="exploration-elevation-legend__band-heading">
+                              <span>Terreno · {visibleExplorationMode === "adaptive" ? "adaptativo" : "absoluto"}</span>
+                              {visibleExplorationRequestedMode === "adaptive" && (
+                                <Button
+                                  variant="ghost"
+                                  size="small"
+                                  className="exploration-elevation-refresh"
+                                  aria-label="Recalcular escala adaptativa para la vista actual"
+                                  title="Recalcular con las teselas de la vista actual"
+                                  onClick={() => setExplorationElevationScaleRefresh((revision) => revision + 1)}
+                                >
+                                  <RefreshCw size={13} aria-hidden="true" /> Recalcular
+                                </Button>
+                              )}
+                            </div>
+                            <i style={{ background: visibleExplorationMode === "adaptive" ? adaptiveLandGradient : absoluteLandGradient }} aria-hidden="true" />
+                            {visibleExplorationMode === "adaptive" ? (
+                              <div className="exploration-elevation-legend__values"><span>&lt; {formatElevation(visibleExplorationScale.minM)} m</span><span>&gt; {formatElevation(visibleExplorationScale.maxM)} m</span></div>
+                            ) : (
+                              <div className="exploration-elevation-legend__values"><span>0 m</span><span>1 500 m</span><span>≥ {formatElevation(ABSOLUTE_ELEVATION_MAX_M)} m</span></div>
+                            )}
+                          </div>
+                        </div>
+                        {adaptiveScaleFallback && <span className="elevation-legend-note exploration-elevation-legend__fallback">Muestra insuficiente; se mantiene la escala absoluta.</span>}
                       </div>
-                    </div>
-                    <span className={`elevation-legend-note${adaptiveScaleFallback ? " exploration-elevation-legend__fallback" : ""}`}>{explorationScaleMessage}</span>
-                  </div>
-                </>
-              )}
-              <p className={`exploration-terrain-status exploration-terrain-status--${explorationTerrainStatus}`} role="status">{explorationStatusMessage}</p>
-              <p className="terrain-coverage-note">Mapzen Terrain Tiles · hasta zoom {EXPLORATION_TERRAIN.maxDataZoom}. Visualización orientativa; no sirve para cálculos.</p>
-            </details>
+                    </>
+                  )}
+                  {!showExplorationHillshadeControls && !showExplorationElevationControls && (
+                    <p className="topography-inline-note">Activa una capa para ajustar su representación.</p>
+                  )}
+                </div>
+              </details>
+            </section>
 
-            <div className="terrain-area-heading"><span className="eyebrow">TOPOGRAFÍA DE ÁREAS</span></div>
+            <section className="terrain-area-section" aria-labelledby="prepared-terrain-title">
+              <div className="terrain-area-heading"><span className="eyebrow" id="prepared-terrain-title">TERRENOS PREPARADOS</span></div>
             {selectedPreparedTerrain ? (
               <>
-                <p className="overlay-intro">Configuración para {selectedPreparedTerrain.result.coverage.area_name} · {selectedPreparedTerrain.result.coverage.resolution_m} m.</p>
                 <div className="active-terrain-card">
                   <div className="active-terrain-copy">
-                    <span className="eyebrow">TERRENO DETALLADO</span>
-                    <strong>{selectedPreparedTerrain.visible ? "Visible en el mapa" : "Oculto en el mapa"}</strong>
+                    <strong>{selectedPreparedTerrain.result.coverage.area_name}</strong>
+                    <span>{selectedPreparedTerrain.result.coverage.resolution_m} m · {selectedPreparedTerrain.visible ? "Visible" : "Oculto"}</span>
                   </div>
                   <div className="active-terrain-actions">
-                    <Button variant="outline" size="small" onClick={() => centerPreparedTerrain(selectedPreparedTerrain.elementId)}>
+                    <Switch
+                      checked={selectedPreparedTerrain.visible}
+                      onCheckedChange={(visible) => setPreparedTerrainVisible(selectedPreparedTerrain.elementId, visible)}
+                      aria-label={`${selectedPreparedTerrain.visible ? "Ocultar" : "Mostrar"} terreno de ${selectedPreparedTerrain.result.coverage.area_name}`}
+                    />
+                    <Button variant="ghost" size="small" onClick={() => centerPreparedTerrain(selectedPreparedTerrain.elementId)}>
                       <MapPinned size={14} aria-hidden="true" /> Centrar
-                    </Button>
-                    <Button variant="ghost" size="small" onClick={() => setPreparedTerrainVisible(selectedPreparedTerrain.elementId, !selectedPreparedTerrain.visible)}>
-                      {selectedPreparedTerrain.visible ? <X size={14} aria-hidden="true" /> : <Mountain size={14} aria-hidden="true" />}
-                      {selectedPreparedTerrain.visible ? "Ocultar" : "Mostrar"}
                     </Button>
                   </div>
                 </div>
@@ -995,95 +985,104 @@ export default function App() {
                   {TOPOGRAPHIC_LAYER_OPTIONS.filter(([id]) => id === "hillshade" || id === "elevation" || Boolean(regionalDerivatives)).map(([id, Icon]) => {
                     const layer = TOPOGRAPHIC_LAYERS[id];
                     const isVisible = selectedPreparedTerrain.visibility[id];
-                    const opacityId = `terrain-${selectedPreparedTerrain.elementId}-${id}-opacity`;
-                    const unitHint = id === "slope" ? "· porcentaje" : id === "aspect" ? "· grados" : "";
                     return (
                       <div className="topographic-layer-card" key={id}>
                         <div className="overlay-layer-row topographic-layer-row">
                           <span className={`overlay-symbol topographic-symbol topographic-symbol--${id}`} aria-hidden="true"><Icon size={16} /></span>
-                          <span className="layer-copy">
-                            <span className="layer-title">{layer.title}</span>
-                            <span className="layer-subtitle">{selectedPreparedTerrain.result.coverage.resolution_m} m · {selectedPreparedTerrain.result.coverage.horizontal_crs} {unitHint}</span>
-                          </span>
+                          <span className="layer-copy"><span className="layer-title">{layer.title}</span></span>
                           <Switch
                             checked={isVisible}
                             onCheckedChange={(visible) => setPreparedTerrainLayerVisible(selectedPreparedTerrain.elementId, id, visible)}
                             aria-label={`${isVisible ? "Ocultar" : "Mostrar"} ${layer.title.toLowerCase()}`}
                           />
                         </div>
-                        {isVisible && (
-                          <label className="topographic-opacity" htmlFor={opacityId}>
-                            <span>Opacidad</span><output htmlFor={opacityId}>{selectedPreparedTerrain.opacity[id]} %</output>
-                            <input id={opacityId} type="range" min="0" max="100" step="5" value={selectedPreparedTerrain.opacity[id]} onChange={(event) => setPreparedTerrainOpacity(selectedPreparedTerrain.elementId, id, Number(event.currentTarget.value))} aria-label={`Opacidad de ${layer.title.toLowerCase()}`} />
-                          </label>
-                        )}
-                        {!selectedPreparedTerrain.availability[id] && <p className="topographic-layer-error" role="status">Esta capa no está disponible ahora mismo.</p>}
+                        {!selectedPreparedTerrain.availability[id] && <span className="topographic-layer-error" role="status">No disponible</span>}
                       </div>
                     );
                   })}
                 </div>
-                {selectedPreparedTerrain.visibility.slope && regionalDerivatives && (
-                  <div className="derivative-legend" aria-label="Leyenda de pendientes en porcentaje">
-                    <span className="elevation-legend-title">Pendiente · escala comparable entre áreas</span>
-                    <div className="derivative-legend-grid">{regionalDerivatives.slope.legend.map((item) => <span className="derivative-legend-item" key={item.id}><i style={{ backgroundColor: item.color }} aria-hidden="true" />{item.label}</span>)}</div>
+                <details className="terrain-region-adjustments">
+                  <summary>Opacidad y leyendas</summary>
+                  <div className="terrain-region-adjustments__content">
+                    {TOPOGRAPHIC_LAYER_OPTIONS.filter(([id]) => selectedPreparedTerrain.visibility[id]).map(([id]) => (
+                      <label className="topographic-opacity" htmlFor={`terrain-${selectedPreparedTerrain.elementId}-${id}-opacity`} key={id}>
+                        <span>Opacidad · {TOPOGRAPHIC_LAYERS[id].title}</span>
+                        <output htmlFor={`terrain-${selectedPreparedTerrain.elementId}-${id}-opacity`}>{selectedPreparedTerrain.opacity[id]} %</output>
+                        <input id={`terrain-${selectedPreparedTerrain.elementId}-${id}-opacity`} type="range" min="0" max="100" step="5" value={selectedPreparedTerrain.opacity[id]} onChange={(event) => setPreparedTerrainOpacity(selectedPreparedTerrain.elementId, id, Number(event.currentTarget.value))} aria-label={`Opacidad de ${TOPOGRAPHIC_LAYERS[id].title.toLowerCase()}`} />
+                      </label>
+                    ))}
+                    {selectedPreparedTerrain.visibility.slope && regionalDerivatives && (
+                      <div className="derivative-legend" aria-label="Leyenda de pendientes en porcentaje">
+                        <span className="elevation-legend-title">Pendiente</span>
+                        <div className="derivative-legend-grid">{regionalDerivatives.slope.legend.map((item) => <span className="derivative-legend-item" key={item.id}><i style={{ backgroundColor: item.color }} aria-hidden="true" />{item.label}</span>)}</div>
+                      </div>
+                    )}
+                    {selectedPreparedTerrain.visibility.aspect && regionalDerivatives && (
+                      <div className="derivative-legend" aria-label="Leyenda de orientación de laderas">
+                        <span className="elevation-legend-title">Orientación</span>
+                        <div className="derivative-legend-grid derivative-legend-grid--aspect">{regionalDerivatives.aspect.legend.map((item) => <span className="derivative-legend-item" key={item.id} title={item.label} aria-label={item.label}><i style={{ backgroundColor: item.color }} aria-hidden="true" />{item.direction}</span>)}</div>
+                        <span className="derivative-legend-note">Norte de cuadrícula · las zonas planas no tienen orientación.</span>
+                      </div>
+                    )}
+                    {selectedPreparedTerrain.visibility.elevation && (
+                      <div className="elevation-legend" aria-label={`Leyenda de elevación de ${selectedPreparedTerrain.result.coverage.area_name} en metros`}>
+                        <span className="elevation-legend-title">Elevación · metros</span>
+                        <div className="elevation-legend-gradient" style={regionalElevationGradient ? { background: regionalElevationGradient } : undefined} />
+                        {regionalElevationStyle && <div className="elevation-legend-values"><span>{formatElevation(regionalElevationStyle.min_m)} m</span><span>{formatElevation((regionalElevationStyle.min_m + regionalElevationStyle.max_m) / 2)} m</span><span>{formatElevation(regionalElevationStyle.max_m)} m</span></div>}
+                        <span className="elevation-legend-note">La escala se ajusta a esta área.</span>
+                      </div>
+                    )}
+                    {activeTerrainOverzoomFactor !== null && activeTerrainOverzoomFactor > 2 && <p className="terrain-resolution-note">El zoom por encima de 30 m no añade detalle.</p>}
+                    {!TOPOGRAPHIC_LAYER_OPTIONS.some(([id]) => selectedPreparedTerrain.visibility[id]) && <p className="topography-inline-note">Activa una capa para ajustar su opacidad.</p>}
                   </div>
-                )}
-                {selectedPreparedTerrain.visibility.aspect && regionalDerivatives && (
-                  <div className="derivative-legend" aria-label="Leyenda de orientación de laderas">
-                    <span className="elevation-legend-title">Orientación · escala comparable entre áreas</span>
-                    <div className="derivative-legend-grid derivative-legend-grid--aspect">{regionalDerivatives.aspect.legend.map((item) => <span className="derivative-legend-item" key={item.id} title={item.label} aria-label={item.label}><i style={{ backgroundColor: item.color }} aria-hidden="true" />{item.direction}</span>)}</div>
-                    <span className="derivative-legend-note">Norte de cuadrícula · los píxeles planos no tienen orientación.</span>
-                  </div>
-                )}
-                {selectedPreparedTerrain.visibility.elevation && (
-                  <div className="elevation-legend" aria-label={`Leyenda de elevación de ${selectedPreparedTerrain.result.coverage.area_name} en metros`}>
-                    <span className="elevation-legend-title">Elevación · escala adaptativa de {selectedPreparedTerrain.result.coverage.area_name} (m)</span>
-                    <div className="elevation-legend-gradient" style={regionalElevationGradient ? { background: regionalElevationGradient } : undefined} />
-                    {regionalElevationStyle && <div className="elevation-legend-values"><span>{formatElevation(regionalElevationStyle.min_m)} m</span><span>{formatElevation((regionalElevationStyle.min_m + regionalElevationStyle.max_m) / 2)} m</span><span>{formatElevation(regionalElevationStyle.max_m)} m</span></div>}
-                    <span className="elevation-legend-note">Los colores se ajustan a cada área; no comparan alturas entre áreas.</span>
-                  </div>
-                )}
-                {activeTerrainOverzoomFactor !== null && activeTerrainOverzoomFactor > 2 && <p className="terrain-resolution-note">Vista ampliada {activeTerrainOverzoomFactor.toLocaleString("es-ES", { maximumFractionDigits: 1 })}× respecto a 30 m; el zoom no añade detalle.</p>}
+                </details>
               </>
             ) : (
-              <p className="overlay-intro">Selecciona un terreno preparado en «Áreas» para ajustar sus capas. El relieve mundial sigue disponible abajo.</p>
+              <p className="topography-inline-note">Selecciona un terreno preparado para ver sus capas.</p>
             )}
-            <details className="terrain-global-controls">
-              <summary>Relieve mundial · ETOPO 60″</summary>
-              <p className="terrain-coverage-note">Opción general de menor resolución; el terreno preparado se dibuja por encima en su área.</p>
-              <div className="topographic-layer-list">
-                {TOPOGRAPHIC_LAYER_OPTIONS.filter(([id]) => id === "hillshade" || id === "elevation").map(([id, Icon]) => {
-                  const layer = TOPOGRAPHIC_LAYERS[id];
-                  const opacityId = `global-${id}-opacity`;
-                  return <div className="topographic-layer-card" key={id}>
-                    <div className="overlay-layer-row topographic-layer-row"><span className={`overlay-symbol topographic-symbol topographic-symbol--${id}`} aria-hidden="true"><Icon size={16} /></span><span className="layer-copy"><span className="layer-title">{layer.title}</span><span className="layer-subtitle">{layer.description}</span></span><Switch checked={topographicVisibility[id]} disabled={terrainServiceState !== "available" || topographicBasemapActive} onCheckedChange={(visible) => changeTopographicVisibility(id, visible)} aria-label={`${topographicVisibility[id] ? "Ocultar" : "Mostrar"} relieve mundial`} /></div>
-                    {topographicVisibility[id] && <label className="topographic-opacity" htmlFor={opacityId}><span>Opacidad</span><output htmlFor={opacityId}>{topographicOpacity[id]} %</output><input id={opacityId} type="range" min="0" max="100" step="5" value={topographicOpacity[id]} onChange={(event) => changeTopographicOpacity(id, Number(event.currentTarget.value))} aria-label={`Opacidad de ${layer.title.toLowerCase()}`} /></label>}
-                    {topographicVisibility[id] && !topographicAvailability[id] && <p className="topographic-layer-error" role="status">Esta capa mundial no está disponible ahora mismo.</p>}
-                  </div>;
-                })}
-              </div>
-              {topographicBasemapActive && <p className="terrain-coverage-note">ETOPO queda en pausa mientras el mapa base Topográfico ya muestra elevación y sombreado.</p>}
-              {!topographicBasemapActive && topographicVisibility.hillshade && suppressGlobalHillshade && <p className="terrain-coverage-note">El sombreado ETOPO se oculta mientras se muestra el relieve de exploración o un terreno detallado.</p>}
-              {topographicVisibility.elevation && terrainCoverage && terrainRenderMode !== "hidden" && <div className="elevation-legend"><span className="elevation-legend-title">Elevación mundial · altura y profundidad (m)</span><div className="elevation-legend-values"><span>{Math.round(terrainCoverage.minElevation)} m</span><span>0 m</span><span>{Math.round(terrainCoverage.maxElevation)} m</span></div></div>}
-              {terrainServiceState === "unavailable" && <p className="terrain-coverage-note terrain-coverage-note--error">Relieve mundial no disponible; las áreas preparadas siguen funcionando.</p>}
-              {terrainServiceState === "available" && terrainCoverage && <p className="terrain-coverage-note">{!hasTopographicPreference ? "Relieve mundial desactivado." : terrainRenderMode === "hidden" ? "Relieve mundial oculto por escala." : terrainRenderMode === "detailed" ? "Copernicus 30 m disponible en esta vista." : hasDetailedCoverageForView ? "ETOPO 60″ visible; el detalle aparece al acercar." : "ETOPO 60″ visible; no hay cobertura detallada suficiente."}</p>}
-            </details>
-            <details className="terrain-source-details">
-              <summary>Fuentes y atribución</summary>
-              <div className="copernicus-notice">
-              <span>ETOPO 2022 · NOAA NCEI · DOI: 10.25921/fd45-gt74 · CC0 1.0.</span>
-              <a href="https://www.ncei.noaa.gov/products/etopo-global-relief-model" target="_blank" rel="noreferrer">Fuente y documentación NOAA</a>
-              </div>
-              <div className="copernicus-notice">
-                <span>Mapzen Terrain Tiles · Terrarium · teselas de elevación combinadas de varias fuentes abiertas.</span>
-                <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noreferrer">Fuentes y atribución de Mapzen</a>
-              </div>
-              <div className="copernicus-notice">
-              <span>© DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.</span>
-              <span>Produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.</span>
-              <span>The organisations in charge of the Copernicus programme by law or by delegation do not incur any liability for any use of the Copernicus WorldDEM-30.</span>
-              <a href="https://dataspace.copernicus.eu/sites/default/files/media/files/2025-06/copernicus_contributing_mission_data_access_v2_cop_dem_licenses.pdf" target="_blank" rel="noreferrer">Licencia de Copernicus DEM</a>
-              </div>
+            </section>
+            <details className="terrain-advanced">
+              <summary>Más opciones y fuentes</summary>
+              <details className="terrain-global-controls">
+                <summary>ETOPO · relieve de menor resolución</summary>
+                <div className="topographic-layer-list">
+                  {TOPOGRAPHIC_LAYER_OPTIONS.filter(([id]) => id === "hillshade" || id === "elevation").map(([id, Icon]) => {
+                    const layer = TOPOGRAPHIC_LAYERS[id];
+                    const opacityId = `global-${id}-opacity`;
+                    return <div className="topographic-layer-card" key={id}>
+                      <div className="overlay-layer-row topographic-layer-row">
+                        <span className={`overlay-symbol topographic-symbol topographic-symbol--${id}`} aria-hidden="true"><Icon size={16} /></span>
+                        <span className="layer-copy"><span className="layer-title">{layer.title}</span></span>
+                        <Switch checked={topographicVisibility[id]} disabled={terrainServiceState !== "available" || topographicBasemapActive} onCheckedChange={(visible) => changeTopographicVisibility(id, visible)} aria-label={`${topographicVisibility[id] ? "Ocultar" : "Mostrar"} relieve mundial`} />
+                      </div>
+                      {topographicVisibility[id] && <label className="topographic-opacity" htmlFor={opacityId}><span>Opacidad</span><output htmlFor={opacityId}>{topographicOpacity[id]} %</output><input id={opacityId} type="range" min="0" max="100" step="5" value={topographicOpacity[id]} onChange={(event) => changeTopographicOpacity(id, Number(event.currentTarget.value))} aria-label={`Opacidad de ${layer.title.toLowerCase()}`} /></label>}
+                      {topographicVisibility[id] && !topographicAvailability[id] && <p className="topographic-layer-error" role="status">No disponible</p>}
+                    </div>;
+                  })}
+                </div>
+                {topographicBasemapActive && <p className="terrain-coverage-note">ETOPO está en pausa mientras Topográfico muestra el relieve Mapzen.</p>}
+                {!topographicBasemapActive && topographicVisibility.hillshade && suppressGlobalHillshade && <p className="terrain-coverage-note">ETOPO se oculta mientras otro relieve está activo.</p>}
+                {topographicVisibility.elevation && terrainCoverage && terrainRenderMode !== "hidden" && <div className="elevation-legend"><span className="elevation-legend-title">Elevación mundial · metros</span><div className="elevation-legend-values"><span>{Math.round(terrainCoverage.minElevation)} m</span><span>0 m</span><span>{Math.round(terrainCoverage.maxElevation)} m</span></div></div>}
+                {terrainServiceState === "unavailable" && <p className="terrain-coverage-note terrain-coverage-note--error">Relieve mundial no disponible; las áreas preparadas siguen funcionando.</p>}
+                {terrainServiceState === "available" && terrainCoverage && <p className="terrain-coverage-note">{!hasTopographicPreference ? "Relieve mundial desactivado." : terrainRenderMode === "hidden" ? "Oculto por escala." : terrainRenderMode === "detailed" ? "Copernicus 30 m disponible." : hasDetailedCoverageForView ? "ETOPO 60″ visible; el detalle aumenta al acercar." : "ETOPO 60″ visible; sin cobertura detallada en esta vista."}</p>}
+              </details>
+              <details className="terrain-source-details">
+                <summary>Fuentes, licencias y datos</summary>
+                <div className="copernicus-notice">
+                  <span>ETOPO 2022 · NOAA NCEI · DOI: 10.25921/fd45-gt74 · CC0 1.0.</span>
+                  <a href="https://www.ncei.noaa.gov/products/etopo-global-relief-model" target="_blank" rel="noreferrer">Documentación de NOAA</a>
+                </div>
+                <div className="copernicus-notice">
+                  <span>Mapzen Terrain Tiles · Terrarium · mosaico de fuentes abiertas.</span>
+                  <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noreferrer">Fuentes y atribución de Mapzen</a>
+                </div>
+                <div className="copernicus-notice">
+                  <span>© DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.</span>
+                  <span>Produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.</span>
+                  <span>The organisations in charge of the Copernicus programme by law or by delegation do not incur any liability for any use of the Copernicus WorldDEM-30.</span>
+                  <a href="https://dataspace.copernicus.eu/sites/default/files/media/files/2025-06/copernicus_contributing_mission_data_access_v2_cop_dem_licenses.pdf" target="_blank" rel="noreferrer">Licencia de Copernicus DEM</a>
+                </div>
+              </details>
             </details>
           </details>
             </>
@@ -1120,26 +1119,6 @@ export default function App() {
           ))}
           </div>
 
-          <div className="panel-attribution">
-            <span>Fuente cartográfica</span>
-            {baseMap === "osm" ? (
-              <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">
-                © OpenStreetMap contributors
-              </a>
-            ) : baseMap === "qgis" ? (
-              <a href="https://www.naturalearthdata.com/about/terms-of-use/" target="_blank" rel="noreferrer">
-                Made with Natural Earth
-              </a>
-            ) : (
-              <>
-                <a href="https://openfreemap.org/" target="_blank" rel="noreferrer">OpenFreeMap</a>
-                <a href="https://openmaptiles.org/" target="_blank" rel="noreferrer">© OpenMapTiles</a>
-                <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">
-                  © OpenStreetMap contributors
-                </a>
-              </>
-            )}
-          </div>
           <div
             className="panel-resize-handle"
             role="separator"
@@ -1170,7 +1149,7 @@ export default function App() {
 
         <section
           ref={mapStageRef}
-          className="map-stage"
+          className={`map-stage${drawingTools.activeTool === "navigate" ? " map-stage--exploring" : ""}`}
           aria-label="Visor cartográfico"
           onContextMenu={handleStageContextMenu}
         >

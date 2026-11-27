@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, Check, LoaderCircle, MapPinned, Mountain } from "lucide-react";
+import { AlertCircle, LoaderCircle, MapPinned, Mountain } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { SelectedElementInfo } from "@/hooks/useDrawingTools";
 import { formatArea, formatCoordinate, formatDistance } from "@/lib/geometry-metrics";
@@ -37,13 +37,22 @@ export function GeometryDetails({
 
   const rename = () => onRename(element.id, name);
   const value = element.geometry;
+  const geometryLabel = value.kind === "Point" ? "Punto" : value.kind === "LineString" ? "Línea" : "Área";
+  const isPreparing = terrainPreparation?.state === "submitting" || terrainPreparation?.state === "running";
+  const derivativesBusy = terrainPreparation?.derivatives?.state === "submitting"
+    || terrainPreparation?.derivatives?.state === "queued"
+    || terrainPreparation?.derivatives?.state === "running";
+  const derivativeJobId = terrainPreparation?.jobId ?? preparedTerrain?.jobId;
 
   return (
     <section className="geometry-details" aria-labelledby="geometry-details-title">
       <div className="geometry-details-heading">
-        <h2 className="eyebrow" id="geometry-details-title">INFORMACIÓN DEL ELEMENTO</h2>
+        <div>
+          <h2 className="eyebrow" id="geometry-details-title">ELEMENTO SELECCIONADO</h2>
+          <span className="geometry-type-badge">{geometryLabel}</span>
+        </div>
       </div>
-      <label className="geometry-name-label" htmlFor="geometry-element-name">Nombre</label>
+      <label className="sr-only" htmlFor="geometry-element-name">Nombre del elemento</label>
       <input
         id="geometry-element-name"
         className="geometry-name-input"
@@ -53,9 +62,7 @@ export function GeometryDetails({
         onBlur={rename}
         onKeyDown={(event) => {
           if (event.key === "Enter") event.currentTarget.blur();
-          if (event.key === "Escape") {
-            setName(element.name);
-          }
+          if (event.key === "Escape") setName(element.name);
         }}
       />
 
@@ -80,22 +87,33 @@ export function GeometryDetails({
           </>
         )}
       </dl>
-      <p className="geometry-metrics-note">Mediciones orientativas sobre la esfera terrestre.</p>
+
       {value.kind === "Polygon" && (
         <section className="terrain-preparation-card" aria-labelledby="terrain-preparation-title">
           <div className="terrain-preparation-heading">
             <span className="overlay-symbol topographic-symbol" aria-hidden="true"><Mountain size={16} /></span>
             <div>
               <h3 id="terrain-preparation-title">Terreno detallado</h3>
-              <p>Preparar elevación para esta área</p>
+              {preparedTerrain ? (
+                <p>{preparedTerrain.visible ? "Visible en el mapa" : "Preparado"} · {preparedTerrain.result.coverage.resolution_m} m</p>
+              ) : isPreparing ? (
+                <p>Preparando terreno…</p>
+              ) : terrainPreparation?.state === "completed" ? (
+                <p>Disponible · {terrainPreparation.result?.coverage.resolution_m ?? 30} m</p>
+              ) : terrainPreparation?.state === "error" ? (
+                <p>No se pudo preparar</p>
+              ) : (
+                <p>Relieve de 30 m para esta área</p>
+              )}
             </div>
           </div>
-          {terrainPreparation?.state === "submitting" || terrainPreparation?.state === "running" ? (
+
+          {isPreparing && !preparedTerrain ? (
             <p className="terrain-preparation-status" role="status">
               <LoaderCircle size={14} className="spinner" aria-hidden="true" />
-              <span>{terrainPreparation.message}</span>
+              <span>{terrainPreparation?.message}</span>
             </p>
-          ) : terrainPreparation?.state === "error" ? (
+          ) : terrainPreparation?.state === "error" && !preparedTerrain ? (
             <>
               <p className="terrain-preparation-status terrain-preparation-status--error" role="alert">
                 <AlertCircle size={14} aria-hidden="true" />
@@ -108,57 +126,47 @@ export function GeometryDetails({
                 disabled={!element.bboxWgs84}
                 onClick={() => element.bboxWgs84 && onPrepareTerrain(element.id, element.name, element.bboxWgs84)}
               >
-                <Mountain size={14} aria-hidden="true" />
-                Reintentar
+                <Mountain size={14} aria-hidden="true" /> Reintentar
               </Button>
             </>
-          ) : terrainPreparation?.state === "completed" ? (
+          ) : terrainPreparation?.state === "completed" || preparedTerrain ? (
             <>
-              <p className="terrain-preparation-status terrain-preparation-status--ready" role="status">
-                <Check size={14} aria-hidden="true" />
-                <span>{terrainPreparation.message} · {terrainPreparation.result?.coverage.resolution_m} m</span>
-              </p>
               {preparedTerrain ? (
                 <div className="terrain-preparation-actions">
                   <Button variant="outline" size="small" onClick={() => onCenterPreparedTerrain(element.id)}>
-                    <MapPinned size={14} aria-hidden="true" />
-                    Centrar mapa
+                    <MapPinned size={14} aria-hidden="true" /> Centrar
                   </Button>
                   <Button variant="ghost" size="small" onClick={() => onSetTerrainVisible(element.id, !preparedTerrain.visible)}>
-                    {preparedTerrain.visible ? "Ocultar terreno" : "Mostrar terreno"}
+                    {preparedTerrain.visible ? "Ocultar" : "Mostrar"}
                   </Button>
                 </div>
               ) : (
                 <Button variant="outline" size="small" className="terrain-preparation-button" onClick={() => onShowPreparedTerrain(element.id)}>
-                  <MapPinned size={14} aria-hidden="true" />
-                  Ver terreno preparado
+                  <MapPinned size={14} aria-hidden="true" /> Ver terreno preparado
                 </Button>
               )}
               {preparedTerrain && !preparedTerrain.result.derivatives && (
-                <div className="terrain-derivative-preparation">
-                  <p>Prepara pendientes y orientación con los datos ya descargados.</p>
+                <details className="analysis-terrain-advanced">
+                  <summary>Capas derivadas</summary>
+                  <p>Genera pendientes y orientación con los datos preparados.</p>
                   <Button
                     variant="outline"
                     size="small"
                     className="terrain-derivative-button"
-                    disabled={!(terrainPreparation.jobId ?? preparedTerrain.jobId) || terrainPreparation.derivatives?.state === "submitting" || terrainPreparation.derivatives?.state === "queued" || terrainPreparation.derivatives?.state === "running"}
-                    onClick={() => {
-                      const jobId = terrainPreparation.jobId ?? preparedTerrain.jobId;
-                      if (jobId) onPrepareDerivatives(element.id, jobId);
-                    }}
+                    disabled={!derivativeJobId || derivativesBusy}
+                    onClick={() => derivativeJobId && onPrepareDerivatives(element.id, derivativeJobId)}
                   >
-                    {terrainPreparation.derivatives?.state === "submitting" || terrainPreparation.derivatives?.state === "queued" || terrainPreparation.derivatives?.state === "running"
+                    {derivativesBusy
                       ? <LoaderCircle size={14} className="spinner" aria-hidden="true" />
                       : <Mountain size={14} aria-hidden="true" />}
-                    {terrainPreparation.derivatives?.state === "submitting" || terrainPreparation.derivatives?.state === "queued" || terrainPreparation.derivatives?.state === "running" ? "Preparando capas…" : "Preparar pendientes y orientación"}
+                    {derivativesBusy ? "Preparando…" : "Preparar capas derivadas"}
                   </Button>
-                  {terrainPreparation.derivatives?.message && <p className="terrain-derivative-status" role="status">{terrainPreparation.derivatives.message}</p>}
-                </div>
+                  {terrainPreparation?.derivatives?.message && <p className="terrain-derivative-status" role="status">{terrainPreparation.derivatives.message}</p>}
+                </details>
               )}
             </>
           ) : (
             <>
-              <p className="terrain-preparation-help">Usa el rectángulo que contiene el polígono · hasta 4° por lado, 16 teselas y 30 millones de píxeles a 30 m.</p>
               <Button
                 variant="primary"
                 size="small"
@@ -166,13 +174,21 @@ export function GeometryDetails({
                 disabled={!element.bboxWgs84}
                 onClick={() => element.bboxWgs84 && onPrepareTerrain(element.id, element.name, element.bboxWgs84)}
               >
-                <Mountain size={14} aria-hidden="true" />
-                Preparar terreno
+                <Mountain size={14} aria-hidden="true" /> Preparar terreno
               </Button>
+              <details className="terrain-preparation-limits">
+                <summary>Área máxima de preparación</summary>
+                <p>Se prepara el rectángulo del área seleccionada · hasta 4° por lado, 16 teselas y 30 millones de píxeles a 30 m.</p>
+              </details>
             </>
           )}
         </section>
       )}
+
+      <details className="geometry-metrics-note">
+        <summary>Acerca de las mediciones</summary>
+        <p>Son orientativas y se calculan sobre la esfera terrestre.</p>
+      </details>
     </section>
   );
 }

@@ -286,14 +286,14 @@ button {
 
 .panel-empty-state {
   display: grid;
-  justify-items: center;
-  gap: 9px;
-  margin-top: 22px;
-  padding: 22px 14px;
+  justify-items: start;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 13px 11px;
   border: 1px dashed var(--border-strong);
-  border-radius: 12px;
+  border-radius: 9px;
   color: var(--muted);
-  text-align: center;
+  text-align: left;
 }
 
 .panel-empty-state svg {
@@ -306,9 +306,9 @@ button {
 }
 
 .panel-empty-state span {
-  max-width: 240px;
-  font-size: 11px;
-  line-height: 1.5;
+  max-width: 100%;
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .panel-resize-handle {
@@ -363,13 +363,13 @@ button {
 
 .panel-group {
   min-width: 0;
-  margin-top: 19px;
+  margin-top: 12px;
   border-top: 1px solid var(--border);
 }
 
 .panel-group-summary {
   display: flex;
-  min-height: 40px;
+  min-height: 34px;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -398,7 +398,12 @@ button {
 }
 
 .panel-group-summary:focus-visible,
-.terrain-source-details > summary:focus-visible {
+.terrain-source-details > summary:focus-visible,
+.topography-display-settings > summary:focus-visible,
+.terrain-region-adjustments > summary:focus-visible,
+.analysis-terrain-advanced > summary:focus-visible,
+.terrain-preparation-limits > summary:focus-visible,
+.drawn-element-menu > summary:focus-visible {
   outline: 2px solid var(--cv-teal);
   outline-offset: 2px;
 }
@@ -408,15 +413,38 @@ button {
 }
 
 .geometry-details {
-  margin-top: 20px;
-  padding: 13px 11px 11px;
-  border: 1px solid var(--border);
-  border-radius: 11px;
-  background: var(--surface-soft);
+  display: grid;
+  gap: 10px;
+  margin-top: 6px;
+  padding: 6px 0 0;
 }
 
 .geometry-details-heading {
-  margin: 0 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+}
+
+.geometry-details-heading > div {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.geometry-type-badge {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--cv-blue);
+  font-size: 10px;
+  font-weight: 620;
+}
+
+.app-shell[data-theme="dark"] .geometry-type-badge {
+  color: #91dedb;
 }
 
 .geometry-name-label {
@@ -428,7 +456,7 @@ button {
 
 .geometry-name-input {
   width: 100%;
-  min-height: 34px;
+  min-height: 38px;
   padding: 0 9px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
@@ -445,44 +473,64 @@ button {
 }
 
 .geometry-metrics-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 13px 0 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
 }
 
 .geometry-metrics-list > div {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-soft);
 }
 
 .geometry-metrics-list dt {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 9px;
 }
 
 .geometry-metrics-list dd {
   margin: 0;
   color: var(--text);
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   font-weight: 580;
   text-align: right;
 }
 
 .geometry-metrics-note {
-  margin: 11px 0 0;
+  margin: 0;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
+}
+
+.geometry-metrics-note > summary,
+.analysis-terrain-advanced > summary,
+.terrain-preparation-limits > summary {
+  width: fit-content;
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.geometry-metrics-note > p,
+.analysis-terrain-advanced > p,
+.terrain-preparation-limits > p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 10px;
   line-height: 1.45;
 }
 
 .terrain-preparation-card {
   display: grid;
-  gap: 8px;
-  margin-top: 13px;
+  gap: 7px;
+  margin-top: 2px;
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: 9px;
@@ -503,7 +551,7 @@ button {
 }
 
 .terrain-preparation-heading p,
-.terrain-preparation-help {
+.terrain-preparation-heading > div > p {
   margin: 3px 0 0;
   color: var(--muted);
   font-size: 9px;
@@ -547,7 +595,8 @@ button {
 }
 
 .terrain-preparation-actions {
-  display: grid;
+  display: flex;
+  align-items: center;
   gap: 6px;
 }
 
@@ -555,7 +604,14 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin: 0 3px 9px;
+  gap: 8px;
+  margin: 0 2px 9px;
+}
+
+.drawn-elements-caption {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 10px;
 }
 
 .drawn-elements-count {
@@ -577,7 +633,7 @@ button {
 
 .drawn-elements-empty {
   margin: 0;
-  padding: 12px 10px;
+  padding: 11px 10px;
   border: 1px dashed var(--border-strong);
   border-radius: 10px;
   color: var(--muted);
@@ -588,28 +644,34 @@ button {
 .drawn-elements-list {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 0;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .drawn-element-card {
+  position: relative;
   min-width: 0;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-raised);
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.drawn-element-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
 }
 
 .drawn-element-button {
   display: flex;
-  width: 100%;
+  flex: 1;
   min-width: 0;
-  min-height: 48px;
+  min-height: 54px;
   align-items: center;
   gap: 9px;
-  padding: 4px 5px;
+  padding: 4px 3px;
   border: 1px solid transparent;
   border-radius: 10px;
   background: transparent;
@@ -619,36 +681,82 @@ button {
   transition: background-color 140ms ease, border-color 140ms ease;
 }
 
-.drawn-element-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 3px;
-  margin-top: 2px;
+.drawn-element-menu {
+  position: relative;
+  flex: 0 0 auto;
 }
 
-.drawn-element-actions button,
-.drawn-element-rename button {
+.drawn-element-menu > summary {
   display: grid;
-  width: 30px;
-  height: 28px;
-  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
   place-items: center;
   border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.drawn-element-menu > summary::-webkit-details-marker,
+.drawn-element-menu > summary::marker {
+  display: none;
+  content: "";
+}
+
+.drawn-element-menu > summary:hover,
+.drawn-element-menu[open] > summary {
+  border-color: var(--border);
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.drawn-element-menu-actions {
+  position: absolute;
+  z-index: 6;
+  top: calc(100% + 3px);
+  right: 0;
+  display: grid;
+  width: 176px;
+  gap: 2px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  box-shadow: 0 6px 18px rgb(5 41 76 / 16%);
+}
+
+.drawn-element-menu-actions button,
+.drawn-element-rename button {
+  display: flex;
+  min-width: 0;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border: 0;
   border-radius: 7px;
   background: transparent;
   color: var(--muted);
+  font: inherit;
+  font-size: 10px;
   cursor: pointer;
+  text-align: left;
 }
 
-.drawn-element-actions button:hover,
+.drawn-element-menu-actions button:hover,
 .drawn-element-rename button:hover {
   border-color: var(--border);
   background: var(--surface-soft);
   color: var(--text);
 }
 
-.drawn-element-actions .drawn-element-delete:hover {
+.drawn-element-menu-actions .drawn-element-delete:hover {
   color: #a7372e;
+}
+
+.app-shell[data-theme="dark"] .drawn-element-menu-actions .drawn-element-delete:hover {
+  color: #ffaaa3;
 }
 
 .drawn-element-rename {
@@ -672,19 +780,27 @@ button {
 }
 
 .drawn-element-terrain {
-  display: block;
-  margin: 2px 6px 5px;
+  display: inline;
   color: var(--muted);
-  font-size: 10px;
-  line-height: 1.4;
+  font-size: 9px;
+  line-height: 1.25;
   overflow-wrap: anywhere;
 }
 
-.drawn-element-terrain--completed {
+.drawn-element-terrain--ready {
   color: #276b55;
 }
 
-.drawn-element-terrain--error {
+.drawn-element-terrain--visible {
+  color: #276b55;
+}
+
+.drawn-element-terrain--hidden {
+  color: var(--muted);
+}
+
+.drawn-element-terrain--error,
+.drawn-element-terrain--unavailable {
   color: #a8433d;
 }
 
@@ -723,7 +839,7 @@ button {
   min-width: 0;
   flex: 1;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
 .drawn-element-name {
@@ -739,6 +855,20 @@ button {
   font-size: 10px;
 }
 
+.drawn-element-measure {
+  color: var(--text);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.drawn-element-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 6px;
+}
+
 .drawn-element-focus {
   flex: 0 0 auto;
   color: var(--muted);
@@ -750,12 +880,12 @@ button {
 
 .base-map-options {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 5px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .thematic-layer-section {
-  margin-top: 24px;
+  margin-top: 11px;
 }
 
 .overlay-intro {
@@ -772,10 +902,10 @@ button {
 
 .overlay-layer-row {
   display: flex;
-  min-height: 49px;
+  min-height: 38px;
   align-items: center;
-  gap: 9px;
-  padding: 5px 3px;
+  gap: 7px;
+  padding: 4px 2px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -784,31 +914,115 @@ button {
 }
 
 .topography-section {
-  margin-top: 19px;
+  margin-top: 12px;
 }
 
 .terrain-exploration-controls {
-  margin: 8px 0 13px;
-  padding: 8px 9px 9px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--surface-soft);
+  margin: 4px 0 10px;
+  padding: 1px 0 0;
 }
 
-.terrain-exploration-controls > summary {
-  width: fit-content;
+.topography-subheading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  padding: 5px 2px;
   color: var(--text);
   font-size: 11px;
-  font-weight: 650;
-  cursor: pointer;
 }
 
-.terrain-exploration-controls > .overlay-intro {
-  margin: 5px 0 6px;
+.topography-state {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 450;
+  text-align: right;
+}
+
+.topography-state--active,
+.topography-state--overzoom,
+.topography-state--regional-priority {
+  color: var(--cv-blue);
+}
+
+.app-shell[data-theme="dark"] .topography-state--active,
+.app-shell[data-theme="dark"] .topography-state--overzoom,
+.app-shell[data-theme="dark"] .topography-state--regional-priority {
+  color: #8cc9f2;
+}
+
+.topography-state--error,
+.topography-state--unavailable {
+  color: #a8433d;
+}
+
+.app-shell[data-theme="dark"] .topography-state--error,
+.app-shell[data-theme="dark"] .topography-state--unavailable {
+  color: #ffc2bd;
+}
+
+.topography-inline-note {
+  margin: 3px 2px 7px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.topographic-toggle-list .overlay-layer-row {
+  min-height: 36px;
 }
 
 .exploration-terrain-row {
-  padding: 5px 0 3px;
+  padding: 3px 0;
+}
+
+.topography-display-settings,
+.terrain-region-adjustments,
+.terrain-advanced {
+  margin-top: 5px;
+}
+
+.topography-display-settings > summary,
+.terrain-region-adjustments > summary,
+.terrain-advanced > summary {
+  width: fit-content;
+  padding: 4px 2px;
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.topography-display-settings__content,
+.terrain-region-adjustments__content {
+  display: grid;
+  gap: 9px;
+  padding: 6px 2px 2px;
+}
+
+.terrain-area-section {
+  margin-top: 7px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border);
+}
+
+.terrain-area-heading {
+  margin: 3px 0 5px;
+}
+
+.layer-unavailable {
+  color: #a8433d;
+  font-size: 9px;
+}
+
+.app-shell[data-theme="dark"] .layer-unavailable {
+  color: #ffc2bd;
+}
+
+.terrain-advanced {
+  padding-top: 5px;
+  border-top: 1px solid var(--border);
 }
 
 .topographic-layer-included {
@@ -998,10 +1212,8 @@ button {
 }
 
 .topographic-layer-card {
-  padding: 0 8px 8px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-raised);
+  padding: 0 2px 5px;
+  border-bottom: 1px solid var(--border);
 }
 
 .topographic-layer-row {
@@ -1185,6 +1397,7 @@ button {
 
 .terrain-global-controls > summary {
   width: fit-content;
+  padding: 4px 2px;
   color: var(--text);
   font-size: 10px;
   font-weight: 600;
@@ -1272,20 +1485,22 @@ button {
 
 .base-map-option {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) 14px;
-  grid-template-rows: minmax(38px, auto);
-  align-items: center;
-  gap: 8px;
+  position: relative;
+  grid-template-areas: "preview" "title" "status";
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 34px auto auto;
+  align-items: start;
+  gap: 4px;
   width: 100%;
   min-width: 0;
-  min-height: 48px;
-  padding: 5px 8px;
+  min-height: 68px;
+  padding: 5px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface-raised);
   color: var(--text);
   font: inherit;
-  text-align: left;
+  text-align: center;
   cursor: pointer;
   transition: border-color 140ms ease, background-color 140ms ease;
 }
@@ -1309,35 +1524,31 @@ button {
   background: color-mix(in srgb, #75d7d5 7%, var(--surface-raised));
 }
 
-.base-map-option .layer-copy {
-  grid-column: 2;
-  grid-row: 1;
-  min-width: 0;
-  gap: 2px;
-}
-
-.base-map-option .layer-title {
+.base-map-title {
+  grid-area: title;
+  width: 100%;
   overflow-wrap: anywhere;
-  font-size: 11px;
-  line-height: 1.25;
-  text-overflow: initial;
-  white-space: normal;
-}
-
-.base-map-option .layer-subtitle {
-  overflow-wrap: anywhere;
+  color: var(--text);
   font-size: 9px;
-  line-height: 1.3;
-  white-space: normal;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.base-map-status {
+  grid-area: status;
+  width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.2;
 }
 
 .base-map-preview {
   position: relative;
   display: block;
-  grid-column: 1;
-  grid-row: 1;
-  width: 28px;
-  height: 23px;
+  grid-area: preview;
+  width: 100%;
+  height: 34px;
   overflow: hidden;
   border: 1px solid rgb(20 43 64 / 12%);
   border-radius: 6px;
@@ -1406,16 +1617,18 @@ button {
 }
 
 .base-map-loading {
-  grid-column: 3;
-  grid-row: 1;
-  justify-self: end;
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
   color: var(--cv-blue);
 }
 
 .base-map-indicator {
-  grid-column: 3;
-  grid-row: 1;
-  justify-self: end;
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
 }
 
 .app-shell[data-theme="dark"] .base-map-loading {
@@ -1756,10 +1969,9 @@ button {
 .drawing-instruction {
   position: absolute;
   z-index: 2;
-  bottom: 13px;
-  left: 50%;
-  max-width: min(410px, calc(100% - 310px));
-  transform: translateX(-50%);
+  bottom: 50px;
+  left: 12px;
+  max-width: min(360px, calc(100% - 100px));
   padding: 8px 11px;
   border: 1px solid var(--border);
   border-radius: 9px;
@@ -1770,6 +1982,10 @@ button {
   line-height: 1.4;
   pointer-events: none;
   backdrop-filter: blur(10px);
+}
+
+.map-stage--exploring .drawing-instruction {
+  display: none;
 }
 
 .drawing-instruction > span {
@@ -2049,10 +2265,10 @@ button {
   }
 
   .drawing-instruction {
-    bottom: 52px;
+    bottom: 54px;
     left: 11px;
     transform: none;
-    max-width: calc(100% - 88px);
+    max-width: calc(100% - 84px);
     padding: 7px 9px;
     font-size: 9px;
   }

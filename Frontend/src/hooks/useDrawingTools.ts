@@ -32,6 +32,7 @@ export type DrawnElement = {
   id: string;
   name: string;
   geometryType: DrawingGeometry;
+  geometryInfo?: GeometryInfo;
   bboxWgs84?: [number, number, number, number];
 };
 
@@ -199,6 +200,7 @@ export function useDrawingTools() {
         const geometryType = geometry?.getType() as DrawingGeometry | undefined;
         const id = feature.getId();
         const projection = mapRef.current?.getView().getProjection();
+        const geometryInfo = geometry && projection ? getGeometryInfo(geometry, projection) : null;
         const bboxWgs84 = geometry instanceof Polygon && projection
           ? transformExtent(geometry.getExtent(), projection, "EPSG:4326", 8) as [number, number, number, number]
           : undefined;
@@ -206,6 +208,7 @@ export function useDrawingTools() {
           id: String(id ?? ""),
           name: String(feature.get("name") ?? "Elemento"),
           geometryType: geometryType ?? "Point",
+          ...(geometryInfo ? { geometryInfo } : {}),
           ...(bboxWgs84 ? { bboxWgs84 } : {}),
         };
       }),
