@@ -857,22 +857,26 @@ button {
 
 .topography-state--active,
 .topography-state--overzoom,
+.topography-state--partial,
 .topography-state--regional-priority {
   color: var(--cv-blue);
 }
 
 .app-shell[data-theme="dark"] .topography-state--active,
 .app-shell[data-theme="dark"] .topography-state--overzoom,
+.app-shell[data-theme="dark"] .topography-state--partial,
 .app-shell[data-theme="dark"] .topography-state--regional-priority {
   color: #8cc9f2;
 }
 
 .topography-state--error,
+.topography-state--no-coverage,
 .topography-state--unavailable {
   color: #a8433d;
 }
 
 .app-shell[data-theme="dark"] .topography-state--error,
+.app-shell[data-theme="dark"] .topography-state--no-coverage,
 .app-shell[data-theme="dark"] .topography-state--unavailable {
   color: #ffc2bd;
 }
@@ -967,16 +971,19 @@ button {
 }
 
 .exploration-terrain-status--active,
+.exploration-terrain-status--partial,
 .exploration-terrain-status--overzoom {
   color: var(--cv-blue);
 }
 
 .app-shell[data-theme="dark"] .exploration-terrain-status--active,
+.app-shell[data-theme="dark"] .exploration-terrain-status--partial,
 .app-shell[data-theme="dark"] .exploration-terrain-status--overzoom {
   color: #8cc9f2;
 }
 
 .exploration-terrain-status--error,
+.exploration-terrain-status--no-coverage,
 .exploration-terrain-status--unavailable {
   color: #a8433d;
 }

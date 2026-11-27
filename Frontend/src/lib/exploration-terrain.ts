@@ -146,6 +146,8 @@ export type ExplorationTerrainStatus =
   | "loading"
   | "active"
   | "overzoom"
+  | "partial"
+  | "no-coverage"
   | "regional-priority"
   | "unavailable"
   | "error";

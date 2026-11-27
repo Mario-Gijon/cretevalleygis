@@ -6,7 +6,7 @@ import ScaleLine from "ol/control/ScaleLine.js";
 import { defaults as defaultControls } from "ol/control/defaults.js";
 import { fromLonLat, toLonLat, transformExtent } from "ol/proj.js";
 import OSM from "ol/source/OSM.js";
-import ImageTileSource from "ol/source/ImageTile.js";
+import type DataTileSource from "ol/source/DataTile.js";
 import ImageWMS from "ol/source/ImageWMS.js";
 import type DataTile from "ol/DataTile.js";
 import type { TileSourceEvent } from "ol/source/Tile.js";
@@ -53,6 +53,7 @@ import {
   type ExplorationTerrainTheme,
   type ExplorationTerrainStatus,
 } from "@/lib/exploration-terrain";
+import { createTerrariumDataTileSource, TERRARIUM_DATA_GUTTER } from "@/lib/terrarium-data-tile";
 
 export type MapStatus = {
   ready: boolean;
@@ -97,13 +98,7 @@ function interpolateChannel(input: unknown[], stops: Array<{ value: number; colo
 }
 
 function createShadedReliefStyle() {
-  const elevation = (xOffset: number, yOffset: number) => [
-    "+",
-    ["*", 255 * 256, ["band", 1, xOffset, yOffset]],
-    ["*", 255, ["band", 2, xOffset, yOffset]],
-    ["*", 255 / 256, ["band", 3, xOffset, yOffset]],
-    -32768,
-  ];
+  const elevation = (xOffset: number, yOffset: number) => ["band", 1, xOffset, yOffset];
   const pixelDistance = ["*", 2, ["var", "groundResolution"]];
   const z0x = ["*", ["var", "verticalExaggeration"], elevation(-1, 0)];
   const z1x = ["*", ["var", "verticalExaggeration"], elevation(1, 0)];
@@ -207,7 +202,7 @@ function createShadedReliefStyle() {
   const validDerivativeNeighbors = [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]] as const;
   const derivativeValid = validDerivativeNeighbors.reduce<unknown>((valid, [x, y]) => [
     "case",
-    ["<", ["band", 4, x, y], 16 / 255], 0,
+    ["<", ["band", 2, x, y], 0.99], 0,
     ["case", ["<=", elevation(x, y), 0], 0, valid],
   ], 1);
   const shadeAmount = ["*", ["var", "showHillshade"], ["var", "hillshadeOpacity"]];
@@ -220,7 +215,7 @@ function createShadedReliefStyle() {
   const grayHillshade = ["clamp", ["*", 255, incidence], 0, 255];
   const colorizedTerrain = [">", themeAmount, 0];
   const derivativeThemeValid = ["case", [">", ["var", "showElevation"], 0.5], 1, derivativeValid];
-  const tileAlpha = ["band", 4];
+  const tileAlpha = ["band", 2];
   const outputAlpha = ["*", tileAlpha, ["case", colorizedTerrain,
     ["case", [">", derivativeThemeValid, 0.5], themeAmount, shadeAmount],
     shadeAmount,
@@ -250,51 +245,39 @@ function createShadedReliefStyle() {
 }
 
 function sampleTerrariumTile(tile: DataTile): Float32Array | null {
-  const image = tile.getData();
-  if (!image) return null;
-  const dimensions = image as unknown as CanvasImageSource & {
-    width?: number;
-    height?: number;
-    naturalWidth?: number;
-    naturalHeight?: number;
-    videoWidth?: number;
-    videoHeight?: number;
-  };
-  const width = dimensions.naturalWidth || dimensions.videoWidth || dimensions.width || 0;
-  const height = dimensions.naturalHeight || dimensions.videoHeight || dimensions.height || 0;
-  if (!width || !height) return null;
-
-  try {
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext("2d", { willReadFrequently: true });
-    if (!context) return null;
-    context.drawImage(dimensions, 0, 0, width, height);
-    const pixels = context.getImageData(0, 0, width, height).data;
-    const axis = EXPLORATION_TERRAIN.samplesPerTileAxis;
-    const samples = new Float32Array(axis * axis);
-    let count = 0;
-    for (let row = 0; row < axis; row += 1) {
-      const y = Math.min(height - 1, Math.floor(((row + 0.5) * height) / axis));
-      for (let column = 0; column < axis; column += 1) {
-        const x = Math.min(width - 1, Math.floor(((column + 0.5) * width) / axis));
-        const offset = (y * width + x) * 4;
-        if (pixels[offset + 3] < 16) continue;
-        samples[count] = pixels[offset] * 256 + pixels[offset + 1] + pixels[offset + 2] / 256 - 32768;
-        count += 1;
-      }
+  const data = tile.getData();
+  if (!(data instanceof Float32Array)) return null;
+  const [width, height] = tile.getSize();
+  const tileWidth = width + TERRARIUM_DATA_GUTTER * 2;
+  const tileHeight = height + TERRARIUM_DATA_GUTTER * 2;
+  if (data.length < tileWidth * tileHeight * 2) return null;
+  const axis = EXPLORATION_TERRAIN.samplesPerTileAxis;
+  const samples = new Float32Array(axis * axis);
+  let count = 0;
+  for (let row = 0; row < axis; row += 1) {
+    const y = TERRARIUM_DATA_GUTTER + Math.min(height - 1, Math.floor(((row + 0.5) * height) / axis));
+    for (let column = 0; column < axis; column += 1) {
+      const x = TERRARIUM_DATA_GUTTER + Math.min(width - 1, Math.floor(((column + 0.5) * width) / axis));
+      const offset = (y * tileWidth + x) * 2;
+      if (data[offset + 1] < 0.99) continue;
+      samples[count] = data[offset];
+      count += 1;
     }
-    return samples.slice(0, count);
-  } catch {
-    // Cross-origin, tainted or unsupported images keep the absolute fallback available.
-    return null;
   }
+  return samples.slice(0, count);
 }
 
 function wrappedTileX(x: number, zoom: number): number {
   const worldSize = 2 ** zoom;
   return ((x % worldSize) + worldSize) % worldSize;
+}
+
+function trimMapEntries<T>(entries: globalThis.Map<string, T>, maximumSize: number): void {
+  while (entries.size > maximumSize) {
+    const oldestKey = entries.keys().next().value;
+    if (oldestKey === undefined) return;
+    entries.delete(oldestKey);
+  }
 }
 
 type MapViewProps = {
@@ -355,8 +338,6 @@ export default function MapView({
   const vectorTileListenersRef = useRef(new globalThis.Map<OpenFreeMapId, VectorTileListenerCleanup[]>());
   const explorationStatusRef = useRef(onExplorationTerrainStatusChange);
   const explorationTerrainRef = useRef<WebGLTileLayer | null>(null);
-  const explorationHasLoadedRef = useRef(false);
-  const explorationHasErrorRef = useRef(false);
   const explorationEnabledRef = useRef(explorationTerrainEnabled);
   const explorationOpacityRef = useRef(explorationTerrainOpacity);
   const explorationTerrainThemeRef = useRef(explorationTerrainTheme);
@@ -440,17 +421,11 @@ export default function MapView({
       ]),
     ) as OverlayLayers;
     const webglAvailable = supportsWebGL();
-    const explorationSource = webglAvailable
-      ? new ImageTileSource({
-        url: EXPLORATION_TERRAIN.url,
-        crossOrigin: "anonymous",
-        maxZoom: EXPLORATION_TERRAIN.maxDataZoom,
-        wrapX: true,
-        transition: 180,
-        interpolate: true,
-        attributions: '<a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noreferrer">Mapzen Terrain Tiles · fuentes y atribución</a>',
-      })
-      : null;
+    const terrainDataSource = webglAvailable ? createTerrariumDataTileSource() : null;
+    const explorationSource: DataTileSource | null = terrainDataSource?.source ?? null;
+    explorationSource?.setAttributions(
+      '<a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noreferrer">Mapzen Terrain Tiles · fuentes y atribución</a>',
+    );
     const explorationLayer = explorationSource
       ? new WebGLTileLayer({
         source: explorationSource,
@@ -464,8 +439,6 @@ export default function MapView({
       })
       : null;
     explorationTerrainRef.current = explorationLayer;
-    explorationHasLoadedRef.current = false;
-    explorationHasErrorRef.current = false;
     if (!explorationLayer) explorationStatusRef.current("unavailable");
     const map = new OlMap({
       target: targetRef.current,
@@ -500,6 +473,57 @@ export default function MapView({
     });
 
     const sampledTiles = new globalThis.Map<string, Float32Array>();
+    const explorationTileStates = new globalThis.Map<string, {
+      loading: boolean;
+      hasData: boolean;
+      degraded: boolean;
+      failed: boolean;
+    }>();
+    const terrainTileKey = (coordinate: number[]) => {
+      const [zoom, x, y] = coordinate;
+      return [zoom, wrappedTileX(x, zoom), y].join("/");
+    };
+    const publishExplorationAvailability = (zoom: number) => {
+      const view = map.getView();
+      const size = map.getSize();
+      const resolution = view.getResolution();
+      if (!size || !resolution || !explorationSource) {
+        explorationStatusRef.current?.("loading");
+        return;
+      }
+      const grid = explorationSource.getTileGridForProjection(view.getProjection());
+      const sourceZoom = effectiveTerrainSourceZoom(
+        grid.getZForResolution(resolution),
+        EXPLORATION_TERRAIN.maxDataZoom,
+      );
+      const range = grid.getTileRangeForExtentAndZ(view.calculateExtent(size), sourceZoom);
+      const visibleStates: Array<{
+        loading: boolean;
+        hasData: boolean;
+        degraded: boolean;
+        failed: boolean;
+      } | undefined> = [];
+      for (let y = range.minY; y <= range.maxY; y += 1) {
+        if (y < 0 || y >= 2 ** sourceZoom) continue;
+        for (let x = range.minX; x <= range.maxX; x += 1) {
+          visibleStates.push(explorationTileStates.get(terrainTileKey([sourceZoom, x, y])));
+        }
+      }
+      if (!visibleStates.length || visibleStates.some((state) => !state || state.loading)) {
+        explorationStatusRef.current?.("loading");
+        return;
+      }
+      const loadedStates = visibleStates.flatMap((state) => state && !state.loading ? [state] : []);
+      if (!loadedStates.some((state) => state.hasData)) {
+        explorationStatusRef.current?.(loadedStates.some((state) => state.failed) ? "error" : "no-coverage");
+        return;
+      }
+      if (loadedStates.some((state) => state.degraded || state.failed || !state.hasData)) {
+        explorationStatusRef.current?.("partial");
+        return;
+      }
+      explorationStatusRef.current?.(zoom > EXPLORATION_TERRAIN.maxDataZoom ? "overzoom" : "active");
+    };
     let elevationScaleTimer: ReturnType<typeof setTimeout> | undefined;
     let adaptiveCalculationPending = false;
     let adaptiveCalculationDeadline = 0;
@@ -644,29 +668,45 @@ export default function MapView({
       if (!hasWebGL) explorationStatusRef.current?.("unavailable");
       else if (!isTerrainBasemap) explorationStatusRef.current?.("disabled");
       else if (!hillshadeEnabled && !thematicEnabled) explorationStatusRef.current?.("disabled");
-      else if (explorationHasErrorRef.current) explorationStatusRef.current?.("error");
-      else if (explorationHasLoadedRef.current) {
-        explorationStatusRef.current?.(zoom > EXPLORATION_TERRAIN.maxDataZoom ? "overzoom" : "active");
-      } else explorationStatusRef.current?.("loading");
+      else publishExplorationAvailability(zoom);
     };
     updateExplorationRef.current = updateExplorationVisibility;
     scheduleElevationScaleRef.current = requestElevationScaleUpdate;
-    const explorationTileStarted = () => {
-      if (explorationLayer?.getVisible() && !explorationHasLoadedRef.current) {
-        explorationStatusRef.current?.("loading");
-      }
+    const explorationTileStarted = (event: TileSourceEvent) => {
+      const coordinate = (event.tile as DataTile).getTileCoord();
+      explorationTileStates.set(terrainTileKey(coordinate), {
+        loading: true,
+        hasData: false,
+        degraded: false,
+        failed: false,
+      });
+      trimMapEntries(explorationTileStates, 128);
+      if (explorationLayer?.getVisible()) publishExplorationAvailability(mapZoomRef.current ?? 0);
     };
-    const explorationTileLoaded = () => {
-      explorationHasLoadedRef.current = true;
-      explorationHasErrorRef.current = false;
-      if (!explorationLayer?.getVisible()) return;
-      const zoom = mapZoomRef.current ?? EXPLORATION_TERRAIN.mapMinimumZoom;
-      explorationStatusRef.current?.(zoom > EXPLORATION_TERRAIN.maxDataZoom ? "overzoom" : "active");
+    const explorationTileLoaded = (event: TileSourceEvent) => {
+      const coordinate = (event.tile as DataTile).getTileCoord();
+      const [zoom, x, y] = coordinate;
+      const stats = terrainDataSource?.getTileStats(zoom, x, y);
+      if (!stats) return;
+      explorationTileStates.set(terrainTileKey(coordinate), {
+        loading: false,
+        hasData: stats.validPixels > 0,
+        degraded: stats.fallbackPixels > 0 || stats.missingPixels > 0,
+        failed: stats.failedRequests,
+      });
+      trimMapEntries(explorationTileStates, 128);
+      if (explorationLayer?.getVisible()) publishExplorationAvailability(mapZoomRef.current ?? 0);
     };
-    const explorationTileFailed = () => {
-      if (!explorationLayer?.getVisible()) return;
-      explorationHasErrorRef.current = true;
-      explorationStatusRef.current?.("error");
+    const explorationTileFailed = (event: TileSourceEvent) => {
+      const coordinate = (event.tile as DataTile).getTileCoord();
+      explorationTileStates.set(terrainTileKey(coordinate), {
+        loading: false,
+        hasData: false,
+        degraded: true,
+        failed: true,
+      });
+      trimMapEntries(explorationTileStates, 128);
+      if (explorationLayer?.getVisible()) publishExplorationAvailability(mapZoomRef.current ?? 0);
     };
     explorationSource?.on("tileloadstart", explorationTileStarted);
     explorationSource?.on("tileloadend", explorationTileLoaded);

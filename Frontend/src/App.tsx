@@ -117,8 +117,10 @@ function explorationTerrainStatusMessage(status: ExplorationTerrainStatus, zoom:
   if (status === "loading") return generalized ? "Cargando · vista generalizada…" : "Cargando representación…";
   if (status === "active") return generalized ? "Activa · vista generalizada." : "Representación activa.";
   if (status === "overzoom") return "Activa · detalle máximo disponible.";
+  if (status === "partial") return "Cobertura parcial · resolución reducida.";
+  if (status === "no-coverage") return "Sin datos de elevación en esta vista.";
   if (status === "unavailable") return "El relieve no está disponible en este navegador.";
-  if (status === "error") return "No se pudieron cargar algunas teselas.";
+  if (status === "error") return "No se pudo cargar el relieve en esta vista.";
   return generalized ? "Datos generalizados a esta escala." : "Representación disponible.";
 }
 
