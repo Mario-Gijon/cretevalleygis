@@ -144,8 +144,29 @@ Las pendientes se guardan como valores Float32 en porcentaje de ascenso; su leye
 
 Ambas salidas conservan la resolución de la elevación preparada (30 m), su proyección y NoData. Sus metadatos registran fuente Copernicus DEM GLO-30 Public, huella SHA-256 de la elevación, CRS y unidades horizontales/verticales, algoritmo, unidades del producto y referencia norte. Los rásteres se almacenan junto al terreno regional en el volumen persistente `qgis_world_data`; el producto de orientación para visualización se identifica como tal y la API conserva las rutas de los productos numéricos para futuros análisis zonales. QGIS Server expone `terrain_slope` y `terrain_aspect` dentro del proyecto regional. En el visor solo se muestra una capa temática a la vez, opcionalmente combinada con el relieve sombreado, recortada visualmente por el polígono seleccionado; ambas capas empiezan desactivadas.
 
-La derivación puede pedirse desde la ficha del polígono con un terreno preparado. El estado aparece sin bloquear la navegación; al completarse, se habilitan los controles de visibilidad y opacidad y sus leyendas. Para volver a solicitar los productos mediante la API, repite la petición al mismo endpoint: los rásteres existentes se reutilizan si coinciden la elevación, la cuadrícula, los archivos y sus checksums.
+La derivación de estos productos está disponible mediante el endpoint existente `POST /api/terrain/jobs/{job_id}/derivatives`; el backend reutiliza la elevación y no descarga datos. Dibujar o seleccionar un área no inicia procesamiento. Los rásteres existentes se reutilizan si coinciden la elevación, la cuadrícula, los archivos y sus checksums.
 
-GDAL documenta el algoritmo Horn y las unidades de salida en [gdaldem](https://gdal.org/en/stable/programs/gdaldem.html). Los resultados son capas derivadas para inspección y preparación de análisis; este hito no calcula estadísticas zonales ni criterios del DSS.
+GDAL documenta el algoritmo Horn y las unidades de salida en [gdaldem](https://gdal.org/en/stable/programs/gdaldem.html). Estos valores numéricos alimentan el motor local de estadísticas zonales descrito a continuación; todavía no se generan criterios del DSS.
 
 El estado de trabajos en curso vive en memoria y se pierde si se reinicia el backend. Los trabajos completados se reconstruyen desde sus resultados persistidos en el volumen y siguen disponibles por identificador. Es una cola de un único proceso para desarrollo local, no un servicio de procesamiento distribuido.
+
+## Estadísticas zonales del terreno
+
+`Backend/app/zonal_statistics.py` expone `calculate_zonal_terrain_statistics(geometry_geojson, elevation_raster, slope_raster, aspect_raster)`, independiente de FastAPI y del visor. Recibe una geometría GeoJSON `Polygon` o `MultiPolygon` en longitud/latitud WGS84 y los tres GeoTIFF numéricos de un mismo terreno preparado. Use `aspect-degrees.tif`, nunca `aspect-display.tif`. Los rásteres deben compartir CRS proyectado, resolución, alineación y dimensiones; la geometría se reproyecta antes de calcular.
+
+El motor rasteriza la geometría real, incluidos sus huecos, e incluye un píxel solo si su centro cae dentro del polígono. Lee la ventana correspondiente en bloques de hasta 256 filas y rechaza ventanas mayores que el límite configurado de 30 millones de píxeles. La superficie del polígono se estima en EPSG:6933; la cobertura del ráster y los porcentajes de superficie se aproximan con el área de los píxeles seleccionados por centro y se limitan a 100 %. La cobertura válida por variable relaciona el área aproximada de píxeles válidos con la superficie del polígono; el resultado incluye también la fracción válida de los píxeles rasterizados. Elevación devuelve mínimo, máximo, media, desviación estándar poblacional y `maximum_relief_m` (máximo menos mínimo). Pendiente devuelve los mismos estadísticos y distribución por clase. Los porcentajes de pendiente y orientación usan como denominador los píxeles válidos de esa variable; NoData e inválidos quedan excluidos. Las clases de pendiente reutilizan `terrain_derivative_config.py`.
+
+La orientación sigue el norte de cuadrícula y no calcula media angular. GDAL deja las celdas planas como NoData en el ráster numérico; el motor las reconoce como planas únicamente cuando pendiente válida es ≤0,000001 % y orientación es NoData. Otros píxeles NoData no se confunden con superficie plana. Si falta cobertura válida, el estado de esa variable es `no_data` y sus estadísticas son nulas. El resultado JSON incluye área aproximada, píxeles incluidos y válidos, cobertura, CRS, resolución, unidades, fuente disponible y advertencias; no modifica ningún GeoTIFF.
+
+Para ejecutar el análisis, copie un archivo que contenga la geometría GeoJSON al contenedor y use las rutas numéricas del campo `storage` del resultado del trabajo ya preparado:
+
+```bash
+docker compose cp /tmp/area.geojson backend:/tmp/area.geojson
+docker compose exec backend /opt/backend-venv/bin/python -m app.zonal_statistics \
+  --geometry-file /tmp/area.geojson \
+  --elevation /io/data/terrain/derived/ID_DEL_TERRENO/ID_DEL_PRODUCTO/elevation.tif \
+  --slope /io/data/terrain/derived/ID_DEL_TERRENO/ID_DEL_PRODUCTO/slope-percent.tif \
+  --aspect /io/data/terrain/derived/ID_DEL_TERRENO/ID_DEL_PRODUCTO/aspect-degrees.tif
+```
+
+El JSON se escribe en stdout y puede guardarse redirigiendo la salida. Este motor es una primera utilidad local de análisis: no crea endpoints, no prepara datos automáticamente y no sustituye la validación de criterios posteriores.
