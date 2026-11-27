@@ -40,6 +40,7 @@ import { DrawingToolbar } from "@/components/DrawingToolbar";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useDrawingTools } from "@/hooks/useDrawingTools";
+import { useTerrainAnalysis } from "@/hooks/useTerrainAnalysis";
 import { CRETE_CENTER } from "@/lib/map-config";
 import { formatCoordinate } from "@/lib/geometry-metrics";
 import {
@@ -141,6 +142,7 @@ export default function App() {
   const mapRef = useRef<OlMap | null>(null);
   const baseLayersRef = useRef<BaseMapLayers | null>(null);
   const drawingTools = useDrawingTools();
+  const terrainAnalysis = useTerrainAnalysis();
   const [theme, setTheme] = useState<ThemeMode>(initialTheme);
   const [panelOpen, setPanelOpen] = useState(
     () => !window.matchMedia("(max-width: 720px)").matches,
@@ -319,6 +321,10 @@ export default function App() {
   const visibleExplorationRequestedMode = visibleExplorationScale.requestedMode;
   const adaptiveScaleFallback = visibleExplorationScale.requestedMode === "adaptive"
     && visibleExplorationScale.effectiveMode !== "adaptive";
+
+  useEffect(() => {
+    terrainAnalysis.syncAreas(drawingTools.elements);
+  }, [drawingTools.elements, terrainAnalysis.syncAreas]);
 
   const renderBaseMapOption = (option: { id: BaseMapId; title: string; description: string }) => {
     const terrain = isTerrainBaseMap(option.id);
@@ -734,7 +740,18 @@ export default function App() {
             onDelete={drawingTools.deleteElement}
           /> : <GeometryDetails
             element={selectedElement}
+            analysis={terrainAnalysis.analyses[selectedElement.id]}
             onBackToList={() => setAreaPanelView("list")}
+            onAnalyzeArea={() => {
+              if (selectedElement.geometry.kind !== "Polygon" || !selectedElement.geoJsonGeometry) return;
+              void terrainAnalysis.analyzeArea(
+                selectedElement.id,
+                selectedElement.name,
+                selectedElement.geometryRevision,
+                selectedElement.geoJsonGeometry,
+              );
+            }}
+            onResumeAnalysis={() => { void terrainAnalysis.resumeAnalysis(selectedElement.id); }}
             onRename={drawingTools.renameElement}
           />)}
           </div>

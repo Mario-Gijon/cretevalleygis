@@ -2,15 +2,20 @@ import { useEffect, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { SelectedElementInfo } from "@/hooks/useDrawingTools";
+import { TerrainAnalysisPanel } from "@/components/TerrainAnalysisPanel";
+import type { AreaAnalysisState } from "@/lib/terrain-analysis";
 import { formatArea, formatCoordinate, formatDistance } from "@/lib/geometry-metrics";
 
 type GeometryDetailsProps = {
   element: SelectedElementInfo;
+  analysis?: AreaAnalysisState;
   onBackToList: () => void;
+  onAnalyzeArea: () => void;
+  onResumeAnalysis: () => void;
   onRename: (id: string, name: string) => void;
 };
 
-export function GeometryDetails({ element, onBackToList, onRename }: GeometryDetailsProps) {
+export function GeometryDetails({ element, analysis, onBackToList, onAnalyzeArea, onResumeAnalysis, onRename }: GeometryDetailsProps) {
   const [name, setName] = useState(element?.name ?? "");
 
   useEffect(() => setName(element?.name ?? ""), [element?.id, element?.name]);
@@ -65,7 +70,17 @@ export function GeometryDetails({ element, onBackToList, onRename }: GeometryDet
           </>
         )}
       </dl>
-
+      {value.kind === "Polygon" && element.geoJsonGeometry && (
+        <TerrainAnalysisPanel
+          analysis={analysis?.geometryRevision === element.geometryRevision ? analysis : analysis ? {
+            geometryRevision: element.geometryRevision,
+            state: "idle",
+            message: "La geometría ha cambiado. Analiza de nuevo esta área para actualizar sus resultados.",
+          } : undefined}
+          onAnalyze={onAnalyzeArea}
+          onResume={onResumeAnalysis}
+        />
+      )}
     </section>
   );
 }

@@ -2,6 +2,8 @@
 
 - La interfaz en español mantiene un panel plegable, compacto y redimensionable que prioriza el mapa. El panel tiene dos pestañas: **Capas** y **Áreas**.
 - **Áreas** abre primero la lista. Al elegir un elemento o seleccionarlo en el mapa, la misma pestaña muestra sus propiedades y medidas; un botón visible permite volver a la lista.
+- La ficha de cada polígono ofrece un análisis del terreno bajo demanda. Los indicadores principales se muestran primero; distribuciones y metadatos quedan en secciones plegables, con advertencias de cobertura visibles y sin interferir con la navegación del mapa.
+- Los análisis pertenecen al área y a la revisión de su geometría. Renombrar conserva el resultado; editar invalida solo ese resultado y eliminar el área retira solo su estado asociado.
 - Los elementos dibujados conservan un estilo común y transparente. La ficha se limita a propiedades, medidas y acciones disponibles; no ofrece preparación manual de datos topográficos.
 - La pestaña **Capas** conserva cinco mapas base convencionales y agrupa tres vistas topográficas seleccionables directamente: Elevación, Pendientes y Orientación de laderas. Todas reutilizan una fuente de terreno WebGL; los ajustes y leyenda solo aparecen en esas vistas.
 - El relieve sombreado se activa por separado. Opacidad, intensidad y leyenda se agrupan en ajustes plegados para mantener despejado el panel; elevación ofrece escalas absoluta y adaptativa, con la absoluta como predeterminada.

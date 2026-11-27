@@ -14,6 +14,7 @@ import MapBrowserEventType from "ol/MapBrowserEventType.js";
 import VectorLayer from "ol/layer/Vector.js";
 import VectorSource from "ol/source/Vector.js";
 import { transformExtent } from "ol/proj.js";
+import type { ProjectionLike } from "ol/proj.js";
 import { unByKey } from "ol/Observable.js";
 import { noModifierKeys, primaryAction } from "ol/events/condition.js";
 import type { EventsKey } from "ol/events.js";
@@ -21,6 +22,7 @@ import CircleStyle from "ol/style/Circle.js";
 import Fill from "ol/style/Fill.js";
 import Stroke from "ol/style/Stroke.js";
 import Style from "ol/style/Style.js";
+import GeoJSON, { type GeoJSONPolygon } from "ol/format/GeoJSON.js";
 import { getGeometryInfo, getMeasurementResult, type GeometryInfo, type MeasurementResult } from "@/lib/geometry-metrics";
 
 export type DrawingTool = "navigate" | "point" | "line" | "polygon" | "select" | "modify";
@@ -32,7 +34,9 @@ export type DrawnElement = {
   id: string;
   name: string;
   geometryType: DrawingGeometry;
+  geometryRevision: number;
   geometryInfo?: GeometryInfo;
+  geoJsonGeometry?: GeoJSONPolygon;
   bboxWgs84?: [number, number, number, number];
 };
 
@@ -40,6 +44,8 @@ export type SelectedElementInfo = {
   id: string;
   name: string;
   geometry: GeometryInfo;
+  geometryRevision: number;
+  geoJsonGeometry?: GeoJSONPolygon;
   bboxWgs84?: [number, number, number, number];
 } | null;
 
@@ -63,6 +69,17 @@ const geometryNames: Record<DrawingGeometry, string> = {
   LineString: "Línea",
   Polygon: "Área",
 };
+
+const geoJsonFormat = new GeoJSON();
+
+function polygonAsWgs84GeoJson(geometry: Geometry | undefined, projection: ProjectionLike): GeoJSONPolygon | undefined {
+  if (!(geometry instanceof Polygon)) return undefined;
+  const geoJson = geoJsonFormat.writeGeometryObject(geometry, {
+    featureProjection: projection,
+    dataProjection: "EPSG:4326",
+  });
+  return geoJson.type === "Polygon" ? geoJson : undefined;
+}
 
 const featureStyle = new Style({
   fill: new Fill({ color: "rgba(69, 197, 197, 0.22)" }),
@@ -190,6 +207,8 @@ export function useDrawingTools() {
         const id = feature.getId();
         const projection = mapRef.current?.getView().getProjection();
         const geometryInfo = geometry && projection ? getGeometryInfo(geometry, projection) : null;
+        const geoJsonGeometry = geometry && projection ? polygonAsWgs84GeoJson(geometry, projection) : undefined;
+        const geometryRevision = geometry?.getRevision() ?? 0;
         const bboxWgs84 = geometry instanceof Polygon && projection
           ? transformExtent(geometry.getExtent(), projection, "EPSG:4326", 8) as [number, number, number, number]
           : undefined;
@@ -197,7 +216,9 @@ export function useDrawingTools() {
           id: String(id ?? ""),
           name: String(feature.get("name") ?? "Elemento"),
           geometryType: geometryType ?? "Point",
+          geometryRevision,
           ...(geometryInfo ? { geometryInfo } : {}),
+          ...(geoJsonGeometry ? { geoJsonGeometry } : {}),
           ...(bboxWgs84 ? { bboxWgs84 } : {}),
         };
       }),
@@ -216,6 +237,8 @@ export function useDrawingTools() {
     const geometry = feature.getGeometry();
     const projection = mapRef.current?.getView().getProjection();
     const geometryInfo = geometry && projection ? getGeometryInfo(geometry, projection) : null;
+    const geoJsonGeometry = geometry && projection ? polygonAsWgs84GeoJson(geometry, projection) : undefined;
+    const geometryRevision = geometry?.getRevision() ?? 0;
     const bboxWgs84 = geometry instanceof Polygon && projection
       ? transformExtent(geometry.getExtent(), projection, "EPSG:4326", 8) as [number, number, number, number]
       : undefined;
@@ -225,6 +248,8 @@ export function useDrawingTools() {
             id: String(feature.getId() ?? ""),
             name: String(feature.get("name") ?? "Elemento"),
             geometry: geometryInfo,
+            geometryRevision,
+            ...(geoJsonGeometry ? { geoJsonGeometry } : {}),
             ...(bboxWgs84 ? { bboxWgs84 } : {}),
           }
         : null,

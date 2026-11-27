@@ -249,3 +249,7 @@ Fragmento abreviado de una respuesta real:
 ```
 
 El resultado incluye la geometría original, versión del esquema, cobertura, unidades, distribuciones, advertencias y estadísticas completas. Una solicitud equivalente completada se reutiliza cuando coinciden la versión analítica, los productos numéricos y sus huellas de archivo; dos geometrías distintas mantienen identidades y resultados separados aunque compartan el mismo bbox. Los resultados completados se guardan atómicamente bajo `/io/data/terrain/analyses` en el volumen persistente; las rutas internas de los rásteres se conservan solo en ese archivo y no se devuelven por la API.
+
+## Análisis desde la interfaz GIS
+
+Selecciona un polígono en la pestaña **Áreas** y pulsa **Analizar área** en su ficha. La interfaz consulta el estado del trabajo mediante el proxy `/api`, muestra la fase del backend y presenta las estadísticas en esa misma ficha. Elevación media, pendiente media, desnivel y superficie con pendiente de hasta el 5 % aparecen primero; el resto de estadísticas, las distribuciones y la información de fuente y cobertura quedan agrupadas en secciones plegables. Cada resultado queda asociado a la revisión geométrica de su área durante la sesión: editar invalida solo ese resultado, mientras que renombrar conserva las estadísticas. No se inicia procesamiento al dibujar o seleccionar y el análisis no cambia la vista del mapa.
