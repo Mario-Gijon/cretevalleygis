@@ -8,14 +8,15 @@ export const EXPLORATION_TERRAIN = {
   minimumAdaptiveSamples: 180,
   minimumDisplayRangeM: 400,
   sampleSettleDelayMs: 650,
+  adaptiveCalculationTimeoutMs: 2_600,
   defaultHillshadeOpacity: 30,
-  defaultElevationOpacity: 42,
-  verticalExaggeration: 1.15,
+  defaultElevationOpacity: 70,
+  verticalExaggeration: 1.1,
   sunElevationDegrees: 45,
   sunAzimuthDegrees: 315,
   defaultHillshadeEnabled: true,
   defaultElevationEnabled: true,
-  defaultElevationMode: "adaptive" as const,
+  defaultElevationMode: "absolute" as const,
   hillshadeStorageKey: "cv-gis-exploration-relief",
   elevationStorageKey: "cv-gis-exploration-elevation",
   elevationModeStorageKey: "cv-gis-exploration-elevation-mode",
@@ -24,33 +25,38 @@ export const EXPLORATION_TERRAIN = {
 export const ABSOLUTE_ELEVATION_MIN_M = -11_000;
 export const ABSOLUTE_ELEVATION_MAX_M = 9_000;
 
-// Kept in step with QGIS/scripts/terrain_style.py for comparable absolute colors.
-export const ABSOLUTE_ELEVATION_STOPS = [
+// The ocean and land ramps are independent. Terrarium stores elevation only,
+// so a negative land elevation cannot always be separated from bathymetry.
+export const OCEAN_ELEVATION_STOPS = [
   { valueM: -11_000, color: "#092e53" },
   { valueM: -8_000, color: "#145d8b" },
   { valueM: -4_000, color: "#3d91af" },
-  { valueM: -2_000, color: "#8dc4ca" },
-  { valueM: 0, color: "#e2e9d4" },
-  { valueM: 500, color: "#b6cb8a" },
-  { valueM: 1_500, color: "#78a568" },
-  { valueM: 2_500, color: "#c6b47a" },
-  { valueM: 4_000, color: "#a77a5a" },
-  { valueM: 6_000, color: "#d0c9bd" },
-  { valueM: 9_000, color: "#f5f3ea" },
+  { valueM: -2_000, color: "#79b2ad" },
+  { valueM: 0, color: "#367d53" },
 ] as const;
 
-// The land colors reuse the regional ramp; a narrow shoreline transition
-// joins its first color to the fixed bathymetry ramp without a tile seam.
+// Continuous, nonlinear land ramp inspired by the prepared QGIS terrain palette.
+export const ABSOLUTE_ELEVATION_STOPS = [
+  { valueM: 0, color: "#367d53" },
+  { valueM: 250, color: "#7fa65e" },
+  { valueM: 500, color: "#b6bc75" },
+  { valueM: 1_000, color: "#d4b87b" },
+  { valueM: 1_500, color: "#b28a64" },
+  { valueM: 2_500, color: "#906b64" },
+  { valueM: 4_000, color: "#765470" },
+  { valueM: 9_000, color: "#523a69" },
+] as const;
+
+// The same natural land colours are spaced evenly when the range is regional.
 export const ADAPTIVE_LAND_STOPS = [
-  { position: 0, color: "#e2e9d4" },
-  { position: 0.12, color: "#315f43" },
-  { position: 0.2784, color: "#66884d" },
-  { position: 0.428, color: "#a0ae68" },
-  { position: 0.5776, color: "#d1c37e" },
-  { position: 0.7184, color: "#bd895f" },
-  { position: 0.8384, color: "#8e7462" },
-  { position: 0.9384, color: "#b8b8b0" },
-  { position: 1, color: "#f5f2e9" },
+  { position: 0, color: "#367d53" },
+  { position: 0.12, color: "#7fa65e" },
+  { position: 0.25, color: "#b6bc75" },
+  { position: 0.45, color: "#d4b87b" },
+  { position: 0.65, color: "#b28a64" },
+  { position: 0.78, color: "#906b64" },
+  { position: 0.9, color: "#765470" },
+  { position: 1, color: "#523a69" },
 ] as const;
 
 export type ExplorationElevationMode = "adaptive" | "absolute";
@@ -137,8 +143,9 @@ export function initialExplorationElevationEnabled(): boolean {
 
 export function initialExplorationElevationMode(): ExplorationElevationMode {
   try {
-    return window.localStorage.getItem(EXPLORATION_TERRAIN.elevationModeStorageKey) === "absolute"
-      ? "absolute"
+    const storedMode = window.localStorage.getItem(EXPLORATION_TERRAIN.elevationModeStorageKey);
+    return storedMode === "adaptive" || storedMode === "absolute"
+      ? storedMode
       : EXPLORATION_TERRAIN.defaultElevationMode;
   } catch {
     return EXPLORATION_TERRAIN.defaultElevationMode;

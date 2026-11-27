@@ -17,6 +17,7 @@ import {
   PanelLeftClose,
   Plus,
   Play,
+  RefreshCw,
   Sun,
   TrendingUp,
   Waves,
@@ -63,6 +64,7 @@ import {
   ABSOLUTE_ELEVATION_MIN_M,
   ABSOLUTE_ELEVATION_STOPS,
   ADAPTIVE_LAND_STOPS,
+  OCEAN_ELEVATION_STOPS,
   absoluteElevationScale,
   initialExplorationElevationEnabled,
   initialExplorationElevationMode,
@@ -115,6 +117,17 @@ function explorationTerrainStatusMessage(status: ExplorationTerrainStatus, zoom:
   return `Zoom actual ${zoom.toLocaleString("es-ES", { maximumFractionDigits: 1 })}.`;
 }
 
+function elevationGradient(
+  stops: ReadonlyArray<{ valueM: number; color: string }>,
+  minimumM: number,
+  maximumM: number,
+): string {
+  const range = maximumM - minimumM;
+  return `linear-gradient(90deg, ${stops.map((stop) => (
+    `${stop.color} ${(((stop.valueM - minimumM) / range) * 100).toFixed(2)}%`
+  )).join(", ")})`;
+}
+
 export default function App() {
   const mapStageRef = useRef<HTMLElement | null>(null);
   const traceMenuRef = useRef<HTMLDivElement | null>(null);
@@ -161,6 +174,7 @@ export default function App() {
   const [explorationElevationScale, setExplorationElevationScale] = useState<ExplorationElevationScale>(
     () => absoluteElevationScale(initialExplorationElevationMode()),
   );
+  const [explorationElevationScaleRefresh, setExplorationElevationScaleRefresh] = useState(0);
   const [explorationTerrainVisible, setExplorationTerrainVisible] = useState(false);
   const [explorationTerrainStatus, setExplorationTerrainStatus] = useState<ExplorationTerrainStatus>("loading");
   const [preparedTerrains, setPreparedTerrains] = useState<Record<string, PreparedTerrainState>>({});
@@ -447,22 +461,18 @@ export default function App() {
   const suppressGlobalHillshade = explorationTerrainVisible || hasVisibleRegionalHillshade;
   const explorationStatusMessage = explorationTerrainStatusMessage(explorationTerrainStatus, mapZoom);
   const formatElevation = (value: number) => Math.round(value).toLocaleString("es-ES");
-  const absoluteExplorationGradient = `linear-gradient(90deg, ${ABSOLUTE_ELEVATION_STOPS.map((stop) => (
-    `${stop.color} ${(((stop.valueM - ABSOLUTE_ELEVATION_MIN_M) / (ABSOLUTE_ELEVATION_MAX_M - ABSOLUTE_ELEVATION_MIN_M)) * 100).toFixed(2)}%`
-  )).join(", ")})`;
-  const oceanExplorationGradient = `linear-gradient(90deg, ${ABSOLUTE_ELEVATION_STOPS.filter((stop) => stop.valueM <= 0).map((stop) => (
-    `${stop.color} ${(((stop.valueM - ABSOLUTE_ELEVATION_MIN_M) / (0 - ABSOLUTE_ELEVATION_MIN_M)) * 100).toFixed(2)}%`
-  )).join(", ")})`;
+  const absoluteLandGradient = elevationGradient(ABSOLUTE_ELEVATION_STOPS, 0, ABSOLUTE_ELEVATION_MAX_M);
+  const oceanExplorationGradient = elevationGradient(OCEAN_ELEVATION_STOPS, ABSOLUTE_ELEVATION_MIN_M, 0);
   const adaptiveLandGradient = `linear-gradient(90deg, ${ADAPTIVE_LAND_STOPS.map((stop) => (
     `${stop.color} ${(stop.position * 100).toFixed(2)}%`
   )).join(", ")})`;
   const adaptiveScaleFallback = explorationElevationScale.requestedMode === "adaptive"
     && explorationElevationScale.effectiveMode !== "adaptive";
   const explorationScaleMessage = explorationElevationScale.requestedMode === "absolute"
-    ? "Escala absoluta; los colores son comparables entre regiones."
+    ? "Escala absoluta fija; los colores son comparables entre regiones."
     : adaptiveScaleFallback
-      ? "Muestra terrestre insuficiente en esta vista; se usa temporalmente la escala absoluta."
-      : `Escala adaptativa regional: ${formatElevation(explorationElevationScale.minM)}–${formatElevation(explorationElevationScale.maxM)} m (${explorationElevationScale.sampleCount.toLocaleString("es-ES")} muestras). Los mismos colores representan rangos distintos en otras regiones.`;
+      ? "Muestra insuficiente; se mantiene la escala absoluta. Recalcula tras cargar más teselas."
+      : `Rango adaptativo fijado: ${formatElevation(explorationElevationScale.minM)}–${formatElevation(explorationElevationScale.maxM)} m. Recalcula tras cambiar de región; los colores no son comparables entre vistas.`;
   const regionalElevationGradient = regionalElevationStyle
     ? `linear-gradient(90deg, ${regionalElevationStyle.stops.map((stop) => (
       `${stop.color} ${(stop.position * 100).toFixed(2)}%`
@@ -888,31 +898,46 @@ export default function App() {
                       <option value="absolute">Absoluta · comparable</option>
                     </select>
                   </label>
-                  {explorationElevationScale.effectiveMode === "adaptive" ? (
-                    <div className="exploration-elevation-legend" aria-label="Leyenda de elevación adaptativa en metros">
-                      <span className="elevation-legend-title">Elevación del mapa · m</span>
-                      <div className="exploration-elevation-legend__bands">
-                        <div className="exploration-elevation-legend__band">
-                          <span>Océano · escala fija</span>
-                          <i style={{ background: oceanExplorationGradient }} aria-hidden="true" />
-                          <div className="exploration-elevation-legend__values"><span>−11 000</span><span>0 m</span></div>
-                        </div>
-                        <div className="exploration-elevation-legend__band">
-                          <span>Terreno · escala adaptativa</span>
-                          <i style={{ background: adaptiveLandGradient }} aria-hidden="true" />
-                          <div className="exploration-elevation-legend__values"><span>{formatElevation(explorationElevationScale.minM)} m</span><span>{formatElevation((explorationElevationScale.minM + explorationElevationScale.maxM) / 2)} m</span><span>{formatElevation(explorationElevationScale.maxM)} m</span></div>
-                        </div>
+                  <div
+                    className="exploration-elevation-legend"
+                    aria-label={`Leyenda de elevación ${explorationElevationScale.effectiveMode === "adaptive" ? "adaptativa" : "absoluta"} en metros`}
+                  >
+                    <span className="elevation-legend-title">Elevación del mapa · m</span>
+                    <div className="exploration-elevation-legend__bands">
+                      <div className="exploration-elevation-legend__band">
+                        <span>Océano · escala fija</span>
+                        <i style={{ background: oceanExplorationGradient }} aria-hidden="true" />
+                        <div className="exploration-elevation-legend__values"><span>≤ {formatElevation(ABSOLUTE_ELEVATION_MIN_M)} m</span><span>0 m</span></div>
                       </div>
-                      <span className="elevation-legend-note">{explorationScaleMessage}</span>
+                      <div className="exploration-elevation-legend__band">
+                        <div className="exploration-elevation-legend__band-heading">
+                          <span>Terreno · {explorationElevationScale.effectiveMode === "adaptive" ? "adaptativo" : "absoluto"}</span>
+                          {explorationElevationScale.requestedMode === "adaptive" && (
+                            <Button
+                              variant="ghost"
+                              size="small"
+                              className="exploration-elevation-refresh"
+                              aria-label="Recalcular escala adaptativa para la vista actual"
+                              title="Recalcular con las teselas de la vista actual"
+                              onClick={() => setExplorationElevationScaleRefresh((revision) => revision + 1)}
+                            >
+                              <RefreshCw size={13} aria-hidden="true" /> Recalcular
+                            </Button>
+                          )}
+                        </div>
+                        <i
+                          style={{ background: explorationElevationScale.effectiveMode === "adaptive" ? adaptiveLandGradient : absoluteLandGradient }}
+                          aria-hidden="true"
+                        />
+                        {explorationElevationScale.effectiveMode === "adaptive" ? (
+                          <div className="exploration-elevation-legend__values"><span>&lt; {formatElevation(explorationElevationScale.minM)} m</span><span>&gt; {formatElevation(explorationElevationScale.maxM)} m</span></div>
+                        ) : (
+                          <div className="exploration-elevation-legend__values"><span>0 m</span><span>1 500 m</span><span>≥ {formatElevation(ABSOLUTE_ELEVATION_MAX_M)} m</span></div>
+                        )}
+                      </div>
                     </div>
-                  ) : (
-                    <div className="exploration-elevation-legend" aria-label="Leyenda de elevación absoluta en metros">
-                      <span className="elevation-legend-title">Elevación y profundidad · m</span>
-                      <i className="exploration-elevation-legend__absolute" style={{ background: absoluteExplorationGradient }} aria-hidden="true" />
-                      <div className="exploration-elevation-legend__values"><span>{formatElevation(ABSOLUTE_ELEVATION_MIN_M)} m</span><span>0 m</span><span>{formatElevation(ABSOLUTE_ELEVATION_MAX_M)} m</span></div>
-                      <span className={`elevation-legend-note${adaptiveScaleFallback ? " exploration-elevation-legend__fallback" : ""}`}>{explorationScaleMessage}</span>
-                    </div>
-                  )}
+                    <span className={`elevation-legend-note${adaptiveScaleFallback ? " exploration-elevation-legend__fallback" : ""}`}>{explorationScaleMessage}</span>
+                  </div>
                 </>
               )}
               <p className={`exploration-terrain-status exploration-terrain-status--${explorationTerrainStatus}`} role="status">{explorationStatusMessage}</p>
@@ -1133,6 +1158,7 @@ export default function App() {
             explorationElevationOpacity={explorationElevationOpacity}
             explorationElevationMode={explorationElevationMode}
             explorationElevationScale={explorationElevationScale}
+            explorationElevationScaleRefresh={explorationElevationScaleRefresh}
             regionalHillshadeVisible={hasVisibleRegionalHillshade}
             onStatusChange={handleMapStatus}
             onQgisStatusChange={handleQgisStatusChange}

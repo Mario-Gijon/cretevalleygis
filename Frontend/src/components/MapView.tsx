@@ -50,6 +50,7 @@ import {
   ABSOLUTE_ELEVATION_STOPS,
   ADAPTIVE_LAND_STOPS,
   EXPLORATION_TERRAIN,
+  OCEAN_ELEVATION_STOPS,
   absoluteElevationScale,
   adaptiveElevationScale,
   type ExplorationElevationMode,
@@ -141,14 +142,16 @@ function createShadedReliefStyle() {
     0,
     1,
   ];
-  const absoluteOceanStops = ABSOLUTE_ELEVATION_STOPS
-    .filter((stop) => stop.valueM <= 0)
-    .map((stop) => ({ value: stop.valueM, color: stop.color }));
-  const absoluteLandStops = ABSOLUTE_ELEVATION_STOPS
-    .filter((stop) => stop.valueM >= 0)
-    .map((stop) => ({ value: stop.valueM, color: stop.color }));
-  const oceanColor = [0, 1, 2].map((channel) => interpolateChannel(oceanElevation, absoluteOceanStops, channel));
-  const absoluteLandColor = [0, 1, 2].map((channel) => interpolateChannel(landElevation, absoluteLandStops, channel));
+  const oceanColor = [0, 1, 2].map((channel) => interpolateChannel(
+    oceanElevation,
+    OCEAN_ELEVATION_STOPS.map((stop) => ({ value: stop.valueM, color: stop.color })),
+    channel,
+  ));
+  const absoluteLandColor = [0, 1, 2].map((channel) => interpolateChannel(
+    landElevation,
+    ABSOLUTE_ELEVATION_STOPS.map((stop) => ({ value: stop.valueM, color: stop.color })),
+    channel,
+  ));
   const adaptiveLandColor = [0, 1, 2].map((channel) => interpolateChannel(
     adaptiveElevation,
     ADAPTIVE_LAND_STOPS.map((stop) => ({ value: stop.position, color: stop.color })),
@@ -168,13 +171,13 @@ function createShadedReliefStyle() {
   ]);
   const shadeAmount = ["*", ["var", "showHillshade"], ["var", "hillshadeOpacity"]];
   const elevationAmount = ["*", ["var", "showElevation"], ["var", "elevationOpacity"]];
-  const lightFactor = ["clamp", ["+", 0.55, ["*", 0.65, incidence]], 0.45, 1.2];
+  const lightFactor = ["clamp", ["+", 0.9, ["*", 0.25, incidence]], 0.72, 1.12];
   const terrainLighting = ["+", 1, ["*", shadeAmount, ["-", lightFactor, 1]]];
   const shadedElevationColor = elevationColor.map((channel) => ["clamp", ["*", channel, terrainLighting], 0, 255]);
   const grayHillshade = ["clamp", ["*", 255, incidence], 0, 255];
   const colorizedTerrain = [">", elevationAmount, 0];
   const tileAlpha = ["band", 4];
-  const outputAlpha = ["*", tileAlpha, ["case", [">", elevationAmount, shadeAmount], elevationAmount, shadeAmount]];
+  const outputAlpha = ["*", tileAlpha, ["case", colorizedTerrain, elevationAmount, shadeAmount]];
   const colorizedOutput = ["color", ...shadedElevationColor, outputAlpha];
   const shadedOutput = ["color", grayHillshade, outputAlpha];
 
@@ -257,6 +260,7 @@ type MapViewProps = {
   explorationElevationOpacity: number;
   explorationElevationMode: ExplorationElevationMode;
   explorationElevationScale: ExplorationElevationScale;
+  explorationElevationScaleRefresh: number;
   regionalHillshadeVisible: boolean;
   onStatusChange: (status: MapStatus) => void;
   onQgisStatusChange: (status: QgisStatus) => void;
@@ -289,6 +293,7 @@ export default function MapView({
   explorationElevationOpacity,
   explorationElevationMode,
   explorationElevationScale,
+  explorationElevationScaleRefresh,
   regionalHillshadeVisible,
   onStatusChange,
   onQgisStatusChange,
@@ -486,7 +491,7 @@ export default function MapView({
         new ScaleLine({ units: "metric", bar: true, text: true, minWidth: 112, steps: 4 }),
       ]),
       view: new View({
-        center: fromLonLat([1.55, 42.65]),
+        center: fromLonLat([-4.6, 37.55]),
         zoom: 8.2,
         minZoom: 2,
         maxZoom: 19,
@@ -496,6 +501,8 @@ export default function MapView({
 
     const sampledTiles = new globalThis.Map<string, Float32Array>();
     let elevationScaleTimer: ReturnType<typeof setTimeout> | undefined;
+    let adaptiveCalculationPending = false;
+    let adaptiveCalculationDeadline = 0;
     const updateExplorationStyle = (resolution: number, latitude: number) => {
       const layer = explorationTerrainRef.current;
       if (!layer) return;
@@ -552,24 +559,41 @@ export default function MapView({
       }
       return values;
     };
-    const updateElevationScale = () => {
+    const scheduleAdaptiveScaleAttempt = () => {
+      if (!adaptiveCalculationPending) return;
+      if (elevationScaleTimer) clearTimeout(elevationScaleTimer);
+      elevationScaleTimer = setTimeout(() => {
+        if (!adaptiveCalculationPending) return;
+        const view = map.getView();
+        if (view.getAnimating() || view.getInteracting()) {
+          scheduleAdaptiveScaleAttempt();
+          return;
+        }
+        const values = getVisibleElevationSamples();
+        const scale = adaptiveElevationScale(values);
+        if (scale) {
+          adaptiveCalculationPending = false;
+          publishElevationScale(scale);
+          return;
+        }
+        if (Date.now() < adaptiveCalculationDeadline) {
+          scheduleAdaptiveScaleAttempt();
+          return;
+        }
+        adaptiveCalculationPending = false;
+        publishElevationScale(absoluteElevationScale("adaptive", values.length));
+      }, EXPLORATION_TERRAIN.sampleSettleDelayMs);
+    };
+    const requestElevationScaleUpdate = () => {
       if (explorationElevationModeRef.current === "absolute") {
+        adaptiveCalculationPending = false;
+        if (elevationScaleTimer) clearTimeout(elevationScaleTimer);
         publishElevationScale(absoluteElevationScale("absolute"));
         return;
       }
-      const values = getVisibleElevationSamples();
-      publishElevationScale(adaptiveElevationScale(values) ?? absoluteElevationScale("adaptive", values.length));
-    };
-    const scheduleElevationScaleUpdate = () => {
-      if (elevationScaleTimer) clearTimeout(elevationScaleTimer);
-      elevationScaleTimer = setTimeout(() => {
-        const view = map.getView();
-        if (view.getAnimating() || view.getInteracting()) {
-          scheduleElevationScaleUpdate();
-          return;
-        }
-        updateElevationScale();
-      }, EXPLORATION_TERRAIN.sampleSettleDelayMs);
+      adaptiveCalculationPending = true;
+      adaptiveCalculationDeadline = Date.now() + EXPLORATION_TERRAIN.adaptiveCalculationTimeoutMs;
+      scheduleAdaptiveScaleAttempt();
     };
     const sampleLoadedTile = (event: TileSourceEvent) => {
       const tile = event.tile as DataTile;
@@ -585,14 +609,14 @@ export default function MapView({
           sampledTiles.delete(oldestKey);
         }
       }
-      scheduleElevationScaleUpdate();
+      if (adaptiveCalculationPending) scheduleAdaptiveScaleAttempt();
     };
-    const scaleTileFailed = () => scheduleElevationScaleUpdate();
-    const absoluteOceanReady = () => publishElevationScale(absoluteElevationScale(explorationElevationModeRef.current));
+    const scaleTileFailed = () => {
+      if (adaptiveCalculationPending) scheduleAdaptiveScaleAttempt();
+    };
     explorationSource?.on("tileloadend", sampleLoadedTile);
     explorationSource?.on("tileloaderror", scaleTileFailed);
-    if (explorationElevationModeRef.current === "absolute") absoluteOceanReady();
-    else scheduleElevationScaleUpdate();
+    requestElevationScaleUpdate();
 
     const updateExplorationVisibility = (zoom: number, latitude: number, resolution: number) => {
       const layer = explorationTerrainRef.current;
@@ -624,7 +648,7 @@ export default function MapView({
       } else explorationStatusRef.current?.("loading");
     };
     updateExplorationRef.current = updateExplorationVisibility;
-    scheduleElevationScaleRef.current = scheduleElevationScaleUpdate;
+    scheduleElevationScaleRef.current = requestElevationScaleUpdate;
     const explorationTileStarted = () => {
       if (explorationLayer?.getVisible() && !explorationHasLoadedRef.current) {
         explorationStatusRef.current?.("loading");
@@ -779,7 +803,7 @@ export default function MapView({
       mapZoomRef.current = zoom;
       updateExplorationVisibility(zoom, latitude, resolution);
       onCenterChange([longitude, latitude], extent, resolution, zoom);
-      scheduleElevationScaleUpdate();
+      if (adaptiveCalculationPending) scheduleAdaptiveScaleAttempt();
     };
     map.on("moveend", updateCenter);
     map.on("change:size", updateCenter);
@@ -813,6 +837,7 @@ export default function MapView({
       explorationSource?.un("tileloadend", sampleLoadedTile);
       explorationSource?.un("tileloaderror", scaleTileFailed);
       if (elevationScaleTimer) clearTimeout(elevationScaleTimer);
+      adaptiveCalculationPending = false;
       sampledTiles.clear();
       vectorTileListenersRef.current.forEach((cleanups) => cleanups.forEach((cleanup) => cleanup()));
       vectorTileListenersRef.current.clear();
@@ -843,14 +868,12 @@ export default function MapView({
       latitude,
       view.getResolution() ?? 1,
     );
-    if (explorationElevationMode === "absolute") {
-      // Absolute mode has a known range and does not need tile sampling.
-      scheduleElevationScaleRef.current?.();
-    } else {
-      scheduleElevationScaleRef.current?.();
-    }
     mapRef.current?.render();
-  }, [explorationTerrainEnabled, explorationTerrainOpacity, explorationElevationEnabled, explorationElevationOpacity, explorationElevationMode, explorationElevationScale, mapGeneration, regionalHillshadeVisible]);
+  }, [explorationTerrainEnabled, explorationTerrainOpacity, explorationElevationEnabled, explorationElevationOpacity, explorationElevationMode, mapGeneration, regionalHillshadeVisible]);
+
+  useEffect(() => {
+    scheduleElevationScaleRef.current?.();
+  }, [explorationElevationMode, explorationElevationScaleRefresh, mapGeneration]);
 
   useEffect(() => {
     const layers = baseLayersRef.current;
