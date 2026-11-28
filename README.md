@@ -311,6 +311,24 @@ GET /api/analysis/jobs/725bfdc2d4d33eca/terrain-model?max_dimension=128
 }
 ```
 
+#### Derivados numéricos alineados (contrato 1.1)
+
+La solicitud conserva el contrato 1.0 por defecto, incluido el endpoint que consume el visor actual. Para obtener también las capas numéricas del mismo análisis, solicita explícitamente:
+
+```http
+GET /api/analysis/jobs/725bfdc2d4d33eca/terrain-model?max_dimension=128&include_derivatives=true
+```
+
+La respuesta usa `schema_version: "1.1"`, mantiene sin cambios los campos 1.0 de elevación y añade `derivatives`. Se leen exclusivamente `raster_paths["slope"]` y `raster_paths["aspect"]` del análisis completado: son los GeoTIFF numéricos Copernicus generados con Horn. Se validan la huella de elevación de origen, algoritmo, unidades, CRS equivalente, transformación afín, dimensiones, tamaño de píxel y alineación norte-arriba. `derivative_version` identifica la etiqueta guardada en los dos GeoTIFF y `analysis_manifest_version` la del manifiesto del análisis; pueden diferir si solo cambió la revisión de estilo. La fuente, suma SHA de elevación, Horn, unidades y rejilla deben seguir siendo compatibles. Un archivo ausente, incompatible o cambiado durante la lectura produce un error controlado; no se usa el ráster de visualización de orientación ni se calcula un sustituto.
+
+`derivatives.target_grid` referencia `grid`: ambas matrices temáticas tienen exactamente las mismas filas, columnas, centros, extensión, CRS local, orden oeste-este/norte-sur y separación que `grid.values_m`. Si la cuadrícula de elevación es nativa, las capas leen las mismas celdas originales. Si se reduce, la elevación conserva su bilineal actual y pendiente/orientación usan vecino más próximo en esos mismos centros de salida. Esta selección conserva valores fuente, evita promediar ángulos como 359° y 1°, y **no** calcula promedios por celda ni conserva necesariamente las proporciones de categorías del análisis zonal. La resolución fuente de 30 m, el algoritmo Horn y la procedencia quedan en los metadatos de `derivatives`.
+
+`derivatives.slope.values_percent` expresa pendientes como porcentaje sin limitar valores superiores a 100 %. Cero es una pendiente válida; valores negativos, NoData, máscaras GDAL y muestras no finitas quedan ausentes. `derivatives.aspect.values_degrees` conserva los ángulos válidos de 0° a 360° respecto al norte de cuadrícula: 0° y 360° son direcciones norte válidas. Una matriz booleana `flat_mask` separa terreno plano de dirección y de ausencia de datos. Se marca plano solo si aspect no tiene muestra válida y la pendiente correspondiente, válida, es ≤ `FLAT_SLOPE_THRESHOLD_PERCENT` (el umbral ya usado por las estadísticas zonales); un aspect NoData en otra situación sigue siendo `null`.
+
+Cada variable informa `total_samples`, `valid_samples`, `missing_samples`, `invalid_domain_samples`, `valid_sample_fraction` y su solapamiento con elevación. Aspect además separa `directional_samples` y `flat_samples`. Estas fracciones describen la cuadrícula rectangular de visualización, no la cobertura zonal de la alternativa; `valid_with_elevation_samples` identifica lo que puede pintarse sobre caras con elevación. Una variable completamente ausente devuelve cobertura `no_data`, no una lectura fallida. Los valores de la cuadrícula no se añaden a estadísticas ni criterios objetivos.
+
+La extracción mantiene el límite existente de 128 muestras por dimensión por defecto y 256 como máximo, lee ventanas GDAL acotadas y comparte la reserva/exclusión mutua del endpoint. Antes y después verifica las huellas de elevación, pendiente y orientación. Cambiar `include_derivatives` no inicia trabajos ni vuelve a procesar los rásteres; el resultado ampliado aumenta el tamaño JSON por incluir dos matrices (y `flat_mask`). Los límites de request, área y reserva siguen siendo los del endpoint 1.0.
+
 El análisis debe estar completado y vigente. El endpoint no acepta rutas de archivo. Devuelve `404` si el análisis o sus datos no existen, `409` si sigue en curso o hay otro procesamiento/extracción activa, `422` para límites inválidos o un análisis fallido y `409` ante un ráster incompatible. Solo se admite una extracción simultánea; durante la lectura reserva el indicador de trabajo existente para evitar competir con una regeneración interna de terreno.
 
 ## Análisis desde la interfaz GIS

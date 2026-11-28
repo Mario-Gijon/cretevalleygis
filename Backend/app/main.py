@@ -217,6 +217,163 @@ class TerrainModelResponse(BaseModel):
         return self
 
 
+class TerrainModelDerivativeCoverage(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    availability: Literal["available", "partial", "no_data"]
+    total_samples: int = Field(ge=1, le=MAX_TERRAIN_MODEL_MAX_DIMENSION**2)
+    valid_samples: int = Field(ge=0)
+    missing_samples: int = Field(ge=0)
+    valid_sample_fraction: float = Field(ge=0.0, le=1.0)
+    invalid_domain_samples: int = Field(ge=0)
+    valid_with_elevation_samples: int = Field(ge=0)
+    valid_with_elevation_fraction: float = Field(ge=0.0, le=1.0)
+    elevation_valid_samples: int = Field(ge=0)
+    fraction_of_elevation_samples_covered: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> "TerrainModelDerivativeCoverage":
+        if self.valid_samples + self.missing_samples != self.total_samples:
+            raise ValueError("derivative coverage counts do not match the target grid")
+        if self.invalid_domain_samples > self.missing_samples:
+            raise ValueError("invalid-domain samples must be included in missing samples")
+        if self.valid_with_elevation_samples > min(self.valid_samples, self.elevation_valid_samples):
+            raise ValueError("derivative/elevation overlap exceeds valid sample counts")
+        expected_valid = self.valid_samples / self.total_samples
+        expected_joint = self.valid_with_elevation_samples / self.total_samples
+        expected_elevation_fraction = (
+            self.valid_with_elevation_samples / self.elevation_valid_samples
+            if self.elevation_valid_samples else 0.0
+        )
+        if (
+            not math.isclose(self.valid_sample_fraction, expected_valid, abs_tol=1e-7)
+            or not math.isclose(self.valid_with_elevation_fraction, expected_joint, abs_tol=1e-7)
+            or not math.isclose(self.fraction_of_elevation_samples_covered, expected_elevation_fraction, abs_tol=1e-7)
+        ):
+            raise ValueError("derivative coverage fractions do not match their sample counts")
+        expected_availability = "no_data" if self.valid_samples == 0 else "partial" if self.missing_samples else "available"
+        if self.availability != expected_availability:
+            raise ValueError("derivative availability does not match its sample counts")
+        return self
+
+
+class TerrainModelAspectCoverage(TerrainModelDerivativeCoverage):
+    directional_samples: int = Field(ge=0)
+    flat_samples: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_aspect_counts(self) -> "TerrainModelAspectCoverage":
+        if self.directional_samples + self.flat_samples != self.valid_samples:
+            raise ValueError("aspect directional and flat counts do not match valid samples")
+        return self
+
+
+class TerrainModelSlopeGrid(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    unit: Literal["percent"]
+    values_percent: list[list[float | None]]
+    coverage: TerrainModelDerivativeCoverage
+
+
+class TerrainModelAspectGrid(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    unit: Literal["degrees"]
+    reference: Literal["grid_north"]
+    values_degrees: list[list[float | None]]
+    flat_mask: list[list[bool]]
+    coverage: TerrainModelAspectCoverage
+
+
+class TerrainModelDerivatives(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    source: Literal["Copernicus DEM GLO-30 Public"]
+    algorithm: Literal["Horn"]
+    derivative_version: str
+    analysis_manifest_version: str
+    source_elevation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_resolution_m: TerrainModelPoint
+    source_horizontal_crs: str
+    source_horizontal_units: Literal["m"]
+    target_grid: Literal["grid"]
+    sampling_method: Literal["native_pixel_centres", "nearest_neighbor_at_common_cell_centres"]
+    resampling_policy: str
+    slope: TerrainModelSlopeGrid
+    aspect: TerrainModelAspectGrid
+    flat_slope_threshold_percent: float = Field(ge=0.0)
+    warnings: list[str]
+
+
+class TerrainModelDerivativesResponse(TerrainModelResponse):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    schema_version: Literal["1.1"] = "1.1"
+    derivatives: TerrainModelDerivatives
+
+    @model_validator(mode="after")
+    def validate_derivative_grids(self) -> "TerrainModelDerivativesResponse":
+        rows = self.grid.rows
+        columns = self.grid.columns
+        elevation = self.grid.values_m
+        slope = self.derivatives.slope.values_percent
+        aspect = self.derivatives.aspect.values_degrees
+        flat = self.derivatives.aspect.flat_mask
+        total = rows * columns
+        elevation_valid = sum(sample is not None for row in elevation for sample in row)
+        if elevation_valid != self.coverage.valid_samples:
+            raise ValueError("elevation coverage counts do not match its matrix")
+
+        for name, matrix in (("slope", slope), ("aspect", aspect), ("aspect flat mask", flat)):
+            if len(matrix) != rows or any(len(row) != columns for row in matrix):
+                raise ValueError(f"{name} grid dimensions do not match the elevation grid")
+
+        slope_coverage = self.derivatives.slope.coverage
+        slope_samples = [sample for row in slope for sample in row if sample is not None]
+        if (
+            slope_coverage.total_samples != total
+            or len(slope_samples) != slope_coverage.valid_samples
+            or slope_coverage.elevation_valid_samples != elevation_valid
+            or any(sample < 0 for sample in slope_samples)
+        ):
+            raise ValueError("slope matrix contradicts its coverage or domain")
+        slope_overlap = sum(
+            slope[row][column] is not None and elevation[row][column] is not None
+            for row in range(rows) for column in range(columns)
+        )
+        if slope_overlap != slope_coverage.valid_with_elevation_samples:
+            raise ValueError("slope/elevation overlap does not match the matrices")
+
+        aspect_coverage = self.derivatives.aspect.coverage
+        direction_samples = [sample for row in aspect for sample in row if sample is not None]
+        flat_samples = sum(is_flat for row in flat for is_flat in row)
+        if (
+            aspect_coverage.total_samples != total
+            or len(direction_samples) + flat_samples != aspect_coverage.valid_samples
+            or aspect_coverage.elevation_valid_samples != elevation_valid
+            or aspect_coverage.directional_samples != len(direction_samples)
+            or aspect_coverage.flat_samples != flat_samples
+            or any(sample < 0 or sample > 360 for sample in direction_samples)
+        ):
+            raise ValueError("aspect matrix contradicts its coverage or domain")
+        if any(flat[row][column] and aspect[row][column] is not None for row in range(rows) for column in range(columns)):
+            raise ValueError("flat aspect samples cannot also contain a direction")
+        aspect_overlap = sum(
+            (aspect[row][column] is not None or flat[row][column]) and elevation[row][column] is not None
+            for row in range(rows) for column in range(columns)
+        )
+        if aspect_overlap != aspect_coverage.valid_with_elevation_samples:
+            raise ValueError("aspect/elevation overlap does not match the matrices")
+        if self.derivatives.source_horizontal_crs != self.horizontal_crs:
+            raise ValueError("derivative CRS does not match the elevation grid")
+        if self.derivatives.sampling_method == "native_pixel_centres" and self.grid.sampling_method != "native_pixel_centres":
+            raise ValueError("native derivative sampling requires a native elevation grid")
+        if self.derivatives.sampling_method == "nearest_neighbor_at_common_cell_centres" and self.grid.sampling_method != "bilinear_at_cell_centres":
+            raise ValueError("nearest derivative sampling requires the reduced elevation grid")
+        return self
+
+
 @dataclass
 class TerrainJob:
     job_id: str
@@ -1393,12 +1550,12 @@ def create_terrain_analysis(request: TerrainAnalysisRequest) -> JSONResponse:
         return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=analysis_status_response(job))
 
 
-def get_analysis_job_or_404(analysis_id: str) -> TerrainAnalysisJob:
+def get_analysis_job_or_404(analysis_id: str, *, validate_current: bool = True) -> TerrainAnalysisJob:
     if not ANALYSIS_ID_PATTERN.fullmatch(analysis_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="analysis job not found")
     with jobs_lock:
         job = analysis_jobs.get(analysis_id)
-        if job is not None and job.status == "completed" and not analysis_job_data_is_current(job):
+        if validate_current and job is not None and job.status == "completed" and not analysis_job_data_is_current(job):
             del analysis_jobs[analysis_id]
             job = None
         if job is None:
@@ -1431,7 +1588,10 @@ def get_terrain_analysis_result(analysis_id: str) -> dict[str, Any]:
     return analysis_result_response(job)
 
 
-@app.get("/api/analysis/jobs/{analysis_id}/terrain-model", response_model=TerrainModelResponse)
+@app.get(
+    "/api/analysis/jobs/{analysis_id}/terrain-model",
+    response_model=TerrainModelResponse | TerrainModelDerivativesResponse,
+)
 def get_analysis_terrain_model(
     analysis_id: str,
     max_dimension: int = Query(
@@ -1439,10 +1599,11 @@ def get_analysis_terrain_model(
         ge=MIN_TERRAIN_MODEL_MAX_DIMENSION,
         le=MAX_TERRAIN_MODEL_MAX_DIMENSION,
     ),
+    include_derivatives: bool = Query(default=False),
 ) -> dict[str, Any]:
-    """Read a bounded visual grid from the elevation raster used by a completed analysis."""
+    """Read an elevation grid and optionally aligned numeric derivatives for a completed analysis."""
     global active_job_id
-    job = get_analysis_job_or_404(analysis_id)
+    job = get_analysis_job_or_404(analysis_id, validate_current=not include_derivatives)
     if job.status == "failed":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1453,6 +1614,14 @@ def get_analysis_terrain_model(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "analysis_in_progress", "message": "Terrain analysis has not completed."},
         )
+    if include_derivatives:
+        for variable in ("slope", "aspect"):
+            derivative_path = (job.raster_paths or {}).get(variable)
+            if not isinstance(derivative_path, str) or not Path(derivative_path).is_file():
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"code": f"{variable}_raster_unavailable", "message": f"The numeric {variable} raster is not available."},
+                )
     try:
         validate_terrain_model_geometry(job.geometry)
     except TerrainModelError as error:
@@ -1491,8 +1660,29 @@ def get_analysis_terrain_model(
 
         terrain_job = jobs.get(job.terrain_job_id) or load_persisted_job(job.terrain_job_id)
         vertical_reference = None
+        derivative_provenance: dict[str, Any] | None = None
         if terrain_job and isinstance(terrain_job.result, dict):
             vertical_reference = terrain_job.result.get("coverage", {}).get("vertical_datum")
+            raw_provenance = terrain_job.result.get("derivatives")
+            if isinstance(raw_provenance, dict):
+                derivative_provenance = raw_provenance
+        if include_derivatives and (
+            not derivative_provenance
+            or derivative_provenance.get("algorithm") != "Horn"
+            or derivative_provenance.get("source") != TERRAIN_MODEL_SOURCE
+            or not isinstance(derivative_provenance.get("source_elevation_sha256"), str)
+            or not isinstance(derivative_provenance.get("version"), str)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "incompatible_derivative_provenance", "message": "The completed analysis has no compatible numeric derivative provenance."},
+            )
+        fingerprints_before = raster_fingerprints(job.raster_paths or {})
+        if fingerprints_before is None or fingerprints_before != job.raster_fingerprints:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "terrain_data_unavailable", "message": "The completed analysis raster data is no longer current."},
+            )
         model = extract_terrain_model(
             job.geometry,
             job.raster_paths["elevation"],
@@ -1501,9 +1691,19 @@ def get_analysis_terrain_model(
             source=job.source,
             vertical_reference=vertical_reference,
             expected_horizontal_crs=job.horizontal_crs,
+            include_derivatives=include_derivatives,
+            slope_raster=(job.raster_paths or {}).get("slope") if include_derivatives else None,
+            aspect_raster=(job.raster_paths or {}).get("aspect") if include_derivatives else None,
+            derivative_source_elevation_sha256=(derivative_provenance or {}).get("source_elevation_sha256") if include_derivatives else None,
+            derivative_style_version=(derivative_provenance or {}).get("version") if include_derivatives else None,
         )
+        fingerprints_after = raster_fingerprints(job.raster_paths or {})
         with jobs_lock:
-            if active_job_id != reservation_id or not analysis_job_data_is_current(job):
+            if (
+                active_job_id != reservation_id
+                or fingerprints_after != fingerprints_before
+                or not analysis_job_data_is_current(job)
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail={"code": "terrain_data_changed", "message": "The elevation source changed during extraction; request the model again."},

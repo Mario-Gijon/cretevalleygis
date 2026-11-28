@@ -15,8 +15,11 @@ from typing import Any, Literal
 import numpy as np
 from osgeo import gdal, ogr, osr
 
+from app.zonal_statistics import FLAT_SLOPE_THRESHOLD_PERCENT
+
 
 SCHEMA_VERSION = "1.0"
+DERIVATIVES_SCHEMA_VERSION = "1.1"
 DEFAULT_MAX_DIMENSION = 128
 MIN_MAX_DIMENSION = 16
 MAX_MAX_DIMENSION = 256
@@ -126,6 +129,82 @@ def _open_elevation(path: str | Path) -> tuple[gdal.Dataset, ogr.Geometry, float
     return dataset, spatial_ref, linear_units, transform, nodata_value
 
 
+def _open_derivative(
+    path: str | Path | None,
+    label: Literal["slope", "aspect"],
+    reference: gdal.Dataset,
+    reference_crs: osr.SpatialReference,
+    expected_source_hash: str,
+) -> tuple[gdal.Dataset, float | None, str]:
+    """Open and validate one numeric Horn derivative against the DEM grid."""
+    if path is None or not Path(path).is_file():
+        code = "slope_raster_unavailable" if label == "slope" else "aspect_raster_unavailable"
+        name = "slope" if label == "slope" else "aspect"
+        raise TerrainModelError(code, f"The numeric {name} raster is not available.", 404)
+    try:
+        dataset = gdal.Open(str(path), gdal.GA_ReadOnly)
+    except (RuntimeError, OSError) as error:
+        raise TerrainModelError("terrain_raster_unreadable", f"The numeric {label} raster could not be opened.", 409) from error
+    if dataset is None or dataset.RasterCount != 1 or dataset.RasterXSize < 1 or dataset.RasterYSize < 1:
+        raise TerrainModelError("terrain_raster_unreadable", f"The numeric {label} raster is not a readable single-band dataset.", 409)
+
+    expected_product = "Slope in percent (Horn)" if label == "slope" else "Aspect azimuth in degrees from grid north (Horn)"
+    expected_unit = "percent" if label == "slope" else "degree"
+    try:
+        band = dataset.GetRasterBand(1)
+        projection = dataset.GetProjectionRef()
+        if not projection:
+            raise TerrainModelError("incompatible_derivative_crs", f"The {label} raster has no horizontal CRS.", 409)
+        derivative_crs = osr.SpatialReference()
+        if derivative_crs.ImportFromWkt(projection) != 0:
+            raise TerrainModelError("incompatible_derivative_crs", f"The {label} raster CRS could not be read.", 409)
+        derivative_crs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        if not derivative_crs.IsSame(reference_crs):
+            raise TerrainModelError("incompatible_derivative_crs", f"The {label} raster CRS does not match elevation.", 409)
+        transform = tuple(float(value) for value in dataset.GetGeoTransform())
+        reference_transform = tuple(float(value) for value in reference.GetGeoTransform())
+        if (
+            dataset.RasterXSize != reference.RasterXSize
+            or dataset.RasterYSize != reference.RasterYSize
+            or not all(math.isfinite(value) for value in transform)
+            or any(not math.isclose(value, expected, rel_tol=0.0, abs_tol=1e-8) for value, expected in zip(transform, reference_transform))
+        ):
+            raise TerrainModelError("incompatible_derivative_grid", f"The {label} raster does not share the elevation grid.", 409)
+        if transform[1] <= 0 or transform[5] >= 0 or not math.isclose(transform[2], 0.0, abs_tol=1e-12) or not math.isclose(transform[4], 0.0, abs_tol=1e-12):
+            raise TerrainModelError("incompatible_derivative_grid", f"The {label} raster must use the same north-up grid as elevation.", 409)
+        if not math.isclose(float(derivative_crs.GetLinearUnits()), 1.0, rel_tol=0.0, abs_tol=1e-9):
+            raise TerrainModelError("incompatible_derivative_units", f"The {label} raster horizontal units must be metres.", 409)
+        if (band.GetUnitType() or "").casefold() != expected_unit:
+            raise TerrainModelError("incompatible_derivative_units", f"The {label} raster must use {expected_unit} units.", 409)
+        style_version = dataset.GetMetadataItem("STYLE_VERSION") or ""
+        if (
+            dataset.GetMetadataItem("SOURCE_PRODUCT") != COPERNICUS_SOURCE
+            or dataset.GetMetadataItem("DATA_ROLE") != "numeric-analysis-data"
+            or dataset.GetMetadataItem("DERIVATIVE") != expected_product
+            or dataset.GetMetadataItem("ALGORITHM") != "Horn"
+            or dataset.GetMetadataItem("SOURCE_ELEVATION_SHA256") != expected_source_hash
+            or not style_version.startswith("horn-terrain-derivatives-")
+            or not style_version.removeprefix("horn-terrain-derivatives-").isdigit()
+            or dataset.GetMetadataItem("HORIZONTAL_CRS") != _crs_label(reference_crs)
+            or dataset.GetMetadataItem("HORIZONTAL_UNITS") != "m"
+            or dataset.GetMetadataItem("VERTICAL_UNITS") != "m"
+            or dataset.GetMetadataItem("RESOLUTION_M") != "30"
+        ):
+            raise TerrainModelError("incompatible_derivative_provenance", f"The {label} raster provenance does not match the completed Copernicus analysis.", 409)
+        if label == "aspect" and dataset.GetMetadataItem("NORTH_REFERENCE") != "grid_north":
+            raise TerrainModelError("incompatible_derivative_provenance", "The aspect raster must use grid north.", 409)
+        nodata = band.GetNoDataValue()
+        nodata_value = float(nodata) if nodata is not None else None
+        declared_nodata = dataset.GetMetadataItem("NODATA")
+        if declared_nodata is not None and nodata_value is not None and not math.isclose(float(declared_nodata), nodata_value, rel_tol=0.0, abs_tol=1e-9):
+            raise TerrainModelError("incompatible_derivative_provenance", f"The {label} NoData metadata does not match its band.", 409)
+    except TerrainModelError:
+        raise
+    except (RuntimeError, OSError, TypeError, ValueError) as error:
+        raise TerrainModelError("terrain_raster_unreadable", f"The numeric {label} raster metadata could not be read.", 409) from error
+    return dataset, nodata_value, style_version
+
+
 def _project_geometry(geometry: ogr.Geometry, destination: ogr.SpatialReference) -> ogr.Geometry:
     projected = geometry.Clone()
     source = geometry.GetSpatialReference().Clone()
@@ -221,6 +300,7 @@ def _read_native_window(
     transform: tuple[float, ...],
     nodata: float | None,
     source_window: tuple[int, int, int, int],
+    label: str = "elevation",
 ) -> np.ndarray:
     col_start, row_start, columns, rows = source_window
     result = np.full((rows, columns), np.nan, dtype=np.float32)
@@ -239,9 +319,9 @@ def _read_native_window(
         has_mask = not bool(band.GetMaskFlags() & gdal.GMF_ALL_VALID)
         mask = band.GetMaskBand().ReadAsArray(source_col0, source_row0, width, height) if has_mask else None
     except (RuntimeError, OSError) as error:
-        raise TerrainModelError("terrain_read_failed", "The elevation window could not be read.", 409) from error
+        raise TerrainModelError("terrain_read_failed", f"The {label} window could not be read.", 409) from error
     if values is None or (has_mask and mask is None) or (mask is not None and mask.shape != values.shape):
-        raise TerrainModelError("terrain_read_failed", "The elevation window could not be read.", 409)
+        raise TerrainModelError("terrain_read_failed", f"The {label} window could not be read.", 409)
     valid = _valid_values(values, nodata, mask)
     destination_row = source_row0 - row_start
     destination_col = source_col0 - col_start
@@ -256,13 +336,16 @@ def _read_resampled_window(
     extent: tuple[float, float, float, float],
     columns: int,
     rows: int,
+    *,
+    resample_algorithm: int = gdal.GRA_Bilinear,
+    label: str = "elevation",
 ) -> np.ndarray:
     options: dict[str, Any] = {
         "format": "MEM",
         "outputBounds": extent,
         "width": columns,
         "height": rows,
-        "resampleAlg": gdal.GRA_Bilinear,
+        "resampleAlg": resample_algorithm,
         "dstNodata": _NODATA_OUTPUT,
         "outputType": gdal.GDT_Float32,
         "warpMemoryLimit": WARP_MEMORY_LIMIT_MIB,
@@ -273,13 +356,13 @@ def _read_resampled_window(
     try:
         sampled = gdal.Warp("", dataset, options=gdal.WarpOptions(**options))
         if sampled is None or sampled.RasterCount != 1 or sampled.RasterXSize != columns or sampled.RasterYSize != rows:
-            raise TerrainModelError("terrain_read_failed", "GDAL could not create the bounded elevation grid.", 409)
+            raise TerrainModelError("terrain_read_failed", f"GDAL could not create the bounded {label} grid.", 409)
         band = sampled.GetRasterBand(1)
         values = band.ReadAsArray()
         has_mask = not bool(band.GetMaskFlags() & gdal.GMF_ALL_VALID)
         mask = band.GetMaskBand().ReadAsArray() if has_mask else None
         if values is None or (has_mask and mask is None) or (mask is not None and mask.shape != values.shape):
-            raise TerrainModelError("terrain_read_failed", "The resampled elevation grid could not be read.", 409)
+            raise TerrainModelError("terrain_read_failed", f"The resampled {label} grid could not be read.", 409)
         valid = _valid_values(values, _NODATA_OUTPUT, mask)
         result = np.full((rows, columns), np.nan, dtype=np.float32)
         result[valid] = values[valid]
@@ -288,7 +371,7 @@ def _read_resampled_window(
     except TerrainModelError:
         raise
     except (RuntimeError, OSError, ValueError) as error:
-        raise TerrainModelError("terrain_read_failed", "GDAL could not read the elevation grid.", 409) from error
+        raise TerrainModelError("terrain_read_failed", f"GDAL could not read the {label} grid.", 409) from error
 
 
 def _has_valid_triangle(valid: np.ndarray) -> bool:
@@ -341,8 +424,13 @@ def extract_terrain_model(
     source: str,
     vertical_reference: str | None = None,
     expected_horizontal_crs: str | None = None,
+    include_derivatives: bool = False,
+    slope_raster: str | Path | None = None,
+    aspect_raster: str | Path | None = None,
+    derivative_source_elevation_sha256: str | None = None,
+    derivative_style_version: str | None = None,
 ) -> dict[str, Any]:
-    """Build a bounded, north-up grid from an existing Copernicus elevation raster."""
+    """Build a bounded elevation grid and, on request, aligned Horn derivatives."""
     if isinstance(max_dimension, bool) or not isinstance(max_dimension, int) or not MIN_MAX_DIMENSION <= max_dimension <= MAX_MAX_DIMENSION:
         raise TerrainModelError(
             "invalid_grid_limit",
@@ -350,6 +438,18 @@ def extract_terrain_model(
         )
     if source != COPERNICUS_SOURCE:
         raise TerrainModelError("incompatible_terrain_source", "Only Copernicus DEM GLO-30 analysis data can be used.", 409)
+    if include_derivatives and (slope_raster is None or aspect_raster is None):
+        missing = "slope" if slope_raster is None else "aspect"
+        code = "slope_raster_unavailable" if missing == "slope" else "aspect_raster_unavailable"
+        raise TerrainModelError(code, f"The numeric {missing} raster is not available.", 404)
+    if include_derivatives and (
+        not isinstance(derivative_source_elevation_sha256, str)
+        or len(derivative_source_elevation_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in derivative_source_elevation_sha256.casefold())
+        or not isinstance(derivative_style_version, str)
+        or not derivative_style_version
+    ):
+        raise TerrainModelError("incompatible_derivative_provenance", "Derivative provenance is missing or invalid.", 409)
     geometry_wgs84 = validate_geometry(geometry_geojson)
     dataset, spatial_ref, _, transform, nodata = _open_elevation(elevation_raster)
     band = dataset.GetRasterBand(1)
@@ -401,6 +501,148 @@ def extract_terrain_model(
     else:
         values = _read_native_window(dataset, transform, source_nodata_value, source_window)
         sampling_method = "native_pixel_centres"
+
+    derivative_payload: dict[str, Any] | None = None
+    if include_derivatives:
+        slope_dataset, slope_nodata, slope_data_version = _open_derivative(
+            slope_raster,
+            "slope",
+            dataset,
+            spatial_ref,
+            str(derivative_source_elevation_sha256),
+        )
+        aspect_dataset, aspect_nodata, aspect_data_version = _open_derivative(
+            aspect_raster,
+            "aspect",
+            dataset,
+            spatial_ref,
+            str(derivative_source_elevation_sha256),
+        )
+        if slope_data_version != aspect_data_version:
+            raise TerrainModelError("incompatible_derivative_provenance", "Slope and aspect raster revisions do not match.", 409)
+        if downsampled:
+            slope_samples = _read_resampled_window(
+                slope_dataset,
+                slope_nodata,
+                extent,
+                columns,
+                rows,
+                resample_algorithm=gdal.GRA_NearestNeighbour,
+                label="slope",
+            )
+            aspect_samples = _read_resampled_window(
+                aspect_dataset,
+                aspect_nodata,
+                extent,
+                columns,
+                rows,
+                resample_algorithm=gdal.GRA_NearestNeighbour,
+                label="aspect",
+            )
+            derivative_sampling_method = "nearest_neighbor_at_common_cell_centres"
+        else:
+            slope_samples = _read_native_window(
+                slope_dataset, transform, slope_nodata, source_window, label="slope"
+            )
+            aspect_samples = _read_native_window(
+                aspect_dataset, transform, aspect_nodata, source_window, label="aspect"
+            )
+            derivative_sampling_method = "native_pixel_centres"
+        slope_dataset = None
+        aspect_dataset = None
+
+        elevation_valid = np.isfinite(values)
+        slope_finite = np.isfinite(slope_samples)
+        slope_invalid_count = int(np.count_nonzero(slope_finite & (slope_samples < 0)))
+        slope_valid = slope_finite & (slope_samples >= 0)
+        slope_values = slope_samples.copy()
+        slope_values[~slope_valid] = np.nan
+
+        aspect_finite = np.isfinite(aspect_samples)
+        aspect_domain_valid = aspect_finite & (aspect_samples >= 0) & (aspect_samples <= 360)
+        aspect_invalid_count = int(np.count_nonzero(aspect_finite & ~aspect_domain_valid))
+        # GDAL's raw aspect deliberately leaves truly flat cells as NoData.
+        # Infer flatness only where the paired numeric slope confirms the
+        # existing zonal-statistics threshold; 0 degrees remains valid north.
+        aspect_flat = (
+            ~aspect_finite
+            & slope_valid
+            & (slope_samples <= FLAT_SLOPE_THRESHOLD_PERCENT)
+        )
+        aspect_values = aspect_samples.copy()
+        aspect_values[~aspect_domain_valid] = np.nan
+
+        def coverage(valid_mask: np.ndarray, invalid_count: int = 0) -> dict[str, Any]:
+            total = int(rows * columns)
+            valid_count = int(np.count_nonzero(valid_mask))
+            joint_count = int(np.count_nonzero(valid_mask & elevation_valid))
+            elevation_count = int(np.count_nonzero(elevation_valid))
+            return {
+                "total_samples": total,
+                "valid_samples": valid_count,
+                "missing_samples": total - valid_count,
+                "valid_sample_fraction": round(valid_count / total, 8) if total else 0.0,
+                "invalid_domain_samples": invalid_count,
+                "valid_with_elevation_samples": joint_count,
+                "valid_with_elevation_fraction": round(joint_count / total, 8) if total else 0.0,
+                "elevation_valid_samples": elevation_count,
+                "fraction_of_elevation_samples_covered": round(joint_count / elevation_count, 8) if elevation_count else 0.0,
+                "availability": "no_data" if valid_count == 0 else "partial" if valid_count < total else "available",
+            }
+
+        slope_coverage = coverage(slope_valid, slope_invalid_count)
+        aspect_valid = aspect_domain_valid | aspect_flat
+        aspect_coverage = coverage(aspect_valid, aspect_invalid_count)
+        aspect_coverage["directional_samples"] = int(np.count_nonzero(aspect_domain_valid))
+        aspect_coverage["flat_samples"] = int(np.count_nonzero(aspect_flat))
+        derivative_warnings = [
+            "The thematic grid is sampled at the elevation grid's cell centres; it represents selected source samples and is not an area-weighted aggregate or a zonal category distribution."
+        ]
+        if derivative_sampling_method != "native_pixel_centres":
+            derivative_warnings.append("Slope and aspect use nearest-neighbour samples on the common output grid; elevation uses the existing bilinear method.")
+        if slope_invalid_count:
+            derivative_warnings.append(f"{slope_invalid_count} negative slope samples were excluded as invalid.")
+        if aspect_invalid_count:
+            derivative_warnings.append(f"{aspect_invalid_count} aspect samples outside 0–360 degrees were excluded as invalid.")
+        if slope_coverage["valid_samples"] < rows * columns:
+            derivative_warnings.append("Missing or invalid slope samples remain null and are not inferred from elevation.")
+        if aspect_coverage["missing_samples"]:
+            derivative_warnings.append("Aspect NoData is marked flat only when the paired valid slope is at or below the zonal flat-slope threshold; other missing samples remain null.")
+        if slope_data_version != derivative_style_version:
+            derivative_warnings.append("The numeric rasters retain an older style-revision tag than the analysis manifest; their Horn algorithm, source checksum, units and grid were validated and no raster was regenerated.")
+        derivative_payload = {
+            "source": COPERNICUS_SOURCE,
+            "algorithm": "Horn",
+            "derivative_version": slope_data_version,
+            "analysis_manifest_version": derivative_style_version,
+            "source_elevation_sha256": derivative_source_elevation_sha256,
+            "source_resolution_m": {"east": abs(transform[1]), "north": abs(transform[5])},
+            "source_horizontal_crs": _crs_label(spatial_ref),
+            "source_horizontal_units": "m",
+            "target_grid": "grid",
+            "sampling_method": derivative_sampling_method,
+            "resampling_policy": "Nearest-neighbour samples the original derivative at each common output cell centre; it does not aggregate the area represented by an output cell.",
+            "slope": {
+                "unit": "percent",
+                "values_percent": [
+                    [float(slope_values[row, column]) if slope_valid[row, column] else None for column in range(columns)]
+                    for row in range(rows)
+                ],
+                "coverage": slope_coverage,
+            },
+            "aspect": {
+                "unit": "degrees",
+                "reference": "grid_north",
+                "values_degrees": [
+                    [float(aspect_values[row, column]) if aspect_domain_valid[row, column] else None for column in range(columns)]
+                    for row in range(rows)
+                ],
+                "flat_mask": [[bool(aspect_flat[row, column]) for column in range(columns)] for row in range(rows)],
+                "coverage": aspect_coverage,
+            },
+            "flat_slope_threshold_percent": FLAT_SLOPE_THRESHOLD_PERCENT,
+            "warnings": derivative_warnings,
+        }
     dataset = None
 
     valid = np.isfinite(values)
@@ -448,8 +690,8 @@ def extract_terrain_model(
     if expected_horizontal_crs and crs_label != expected_horizontal_crs:
         raise TerrainModelError("incompatible_terrain_crs", "The elevation raster CRS does not match the completed analysis.", 409)
 
-    return {
-        "schema_version": SCHEMA_VERSION,
+    result = {
+        "schema_version": DERIVATIVES_SCHEMA_VERSION if include_derivatives else SCHEMA_VERSION,
         "analysis_id": analysis_id,
         "source": source,
         "model_type": MODEL_TYPE,
@@ -488,6 +730,9 @@ def extract_terrain_model(
         "context": {"requested_margin_m": context_margin_m, "was_clipped_to_coverage": context_clipped},
         "warnings": warnings,
     }
+    if derivative_payload is not None:
+        result["derivatives"] = derivative_payload
+    return result
 
 
 def dataset_vertical_reference(dataset: gdal.Dataset) -> str | None:
