@@ -30,6 +30,7 @@ type Terrain3DViewProps = {
   theme: "light" | "dark";
   navigationRevision: number;
   onCameraChange: (camera: Terrain3DCamera) => void;
+  onCameraReaderChange: (reader: (() => Terrain3DCamera) | null) => void;
   onStyleChange: (style: OpenFreeMapId) => void;
   onExaggerationChange: (value: number) => void;
 };
@@ -38,6 +39,8 @@ const TERRAIN_SOURCE_ID = "crete-valley-terrain";
 const HILLSHADE_LAYER_ID = "crete-valley-hillshade";
 const MAX_MAP_ZOOM = 18;
 const MIN_MAP_ZOOM = 1;
+const MAX_MAP_PITCH = 82;
+const MIN_MAP_PITCH = 0;
 
 function isOpenFreeMapId(value: string): value is OpenFreeMapId {
   return value in OPEN_FREE_MAP_STYLES;
@@ -76,6 +79,7 @@ export default function Terrain3DView({
   theme,
   navigationRevision,
   onCameraChange,
+  onCameraReaderChange,
   onStyleChange,
   onExaggerationChange,
 }: Terrain3DViewProps) {
@@ -84,13 +88,13 @@ export default function Terrain3DView({
   const exaggerationRef = useRef(exaggeration);
   const themeRef = useRef(theme);
   const currentStyleRef = useRef(styleId);
-  const navigationRef = useRef({ center, zoom });
+  const navigationRef = useRef({ center, zoom, bearing, pitch });
   const [terrainTiles, setTerrainTiles] = useState({ available: 0, missing: 0 });
   const [loadError, setLoadError] = useState<string | null>(null);
 
   exaggerationRef.current = exaggeration;
   themeRef.current = theme;
-  navigationRef.current = { center, zoom };
+  navigationRef.current = { center, zoom, bearing, pitch };
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -106,7 +110,7 @@ export default function Terrain3DView({
         center,
         zoom: Math.max(MIN_MAP_ZOOM, Math.min(MAX_MAP_ZOOM, zoom)),
         bearing,
-        pitch: Math.max(35, Math.min(78, pitch)),
+        pitch: Math.max(MIN_MAP_PITCH, Math.min(MAX_MAP_PITCH, pitch)),
         minZoom: MIN_MAP_ZOOM,
         maxZoom: MAX_MAP_ZOOM,
         maxPitch: 82,
@@ -196,15 +200,20 @@ export default function Terrain3DView({
       }
     };
 
-    const handleMoveEnd = () => {
-      updateVisibleTerrain();
+    const readCamera = (): Terrain3DCamera => {
       const mapCenter = map.getCenter();
-      onCameraChange({
+      return {
         center: [mapCenter.lng, mapCenter.lat],
         zoom: map.getZoom(),
         bearing: map.getBearing(),
         pitch: map.getPitch(),
-      });
+      };
+    };
+    onCameraReaderChange(readCamera);
+
+    const handleMoveEnd = () => {
+      updateVisibleTerrain();
+      onCameraChange(readCamera());
     };
     const handleError = (event: MapLibreErrorEvent) => {
       const message = event.error.message || "No se pudo cargar la cartografía o el relieve 3D.";
@@ -236,10 +245,11 @@ export default function Terrain3DView({
       map.off("moveend", handleMoveEnd);
       map.off("error", handleError);
       map.getCanvas().removeEventListener("webglcontextlost", handleContextLost);
+      onCameraReaderChange(null);
       map.remove();
       if (mapRef.current === map) mapRef.current = null;
     };
-  }, []);
+  }, [onCameraChange, onCameraReaderChange]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -270,9 +280,12 @@ export default function Terrain3DView({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || navigationRevision === 0) return;
+    const target = navigationRef.current;
     map.flyTo({
-      center: navigationRef.current.center,
-      zoom: Math.max(MIN_MAP_ZOOM, Math.min(MAX_MAP_ZOOM, navigationRef.current.zoom)),
+      center: target.center,
+      zoom: Math.max(MIN_MAP_ZOOM, Math.min(MAX_MAP_ZOOM, target.zoom)),
+      bearing: target.bearing,
+      pitch: Math.max(MIN_MAP_PITCH, Math.min(MAX_MAP_PITCH, target.pitch)),
       essential: true,
     });
   }, [navigationRevision]);

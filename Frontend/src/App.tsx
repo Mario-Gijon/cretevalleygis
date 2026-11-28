@@ -230,6 +230,8 @@ export default function App() {
   const [mapCenter, setMapCenter] = useState<[number, number]>([...CRETE_CENTER]);
   const [viewMode, setViewMode] = useState<ViewMode>("2d");
   const [terrainCamera, setTerrainCamera] = useState<Terrain3DCamera | null>(null);
+  const terrainCameraRef = useRef<Terrain3DCamera | null>(terrainCamera);
+  const terrainCameraReaderRef = useRef<(() => Terrain3DCamera) | null>(null);
   const [terrain3DStyle, setTerrain3DStyle] = useState<OpenFreeMapId>(initialTerrain3DStyle);
   const [terrainExaggeration, setTerrainExaggeration] = useState(1);
   const [terrainNavigationRevision, setTerrainNavigationRevision] = useState(0);
@@ -238,6 +240,7 @@ export default function App() {
 
   baseMapRef.current = baseMap;
   viewModeRef.current = viewMode;
+  terrainCameraRef.current = terrainCamera;
 
   useEffect(() => {
     elevationProfiles.syncElements(drawingTools.elements.map(({ id, geometryType, geometryRevision }) => ({
@@ -294,14 +297,17 @@ export default function App() {
 
   const requestTerrainNavigation = useCallback((center: [number, number], zoom: number) => {
     const safeZoom = Math.max(1, Math.min(18, zoom));
-    setMapCenter(center);
-    setMapZoom(safeZoom + 1);
-    setTerrainCamera((current) => ({
+    const currentCamera = terrainCameraReaderRef.current?.() ?? terrainCameraRef.current;
+    const camera: Terrain3DCamera = {
       center,
       zoom: safeZoom,
-      bearing: current?.bearing ?? 0,
-      pitch: current?.pitch ?? 58,
-    }));
+      bearing: currentCamera?.bearing ?? 0,
+      pitch: currentCamera?.pitch ?? 58,
+    };
+    setMapCenter(center);
+    setMapZoom(safeZoom + 1);
+    terrainCameraRef.current = camera;
+    setTerrainCamera(camera);
     setTerrainNavigationRevision((revision) => revision + 1);
   }, []);
 
@@ -486,21 +492,44 @@ export default function App() {
     if (nextMode === viewMode) return;
     if (nextMode === "3d") {
       if (!terrain3DStyleChosenRef.current) setTerrain3DStyle(selectedVectorBaseMap ?? "positron");
-      setTerrainCamera((current) => current ?? {
-        center: mapCenter,
+      const view = mapRef.current?.getView();
+      const projectedCenter = view?.getCenter();
+      const currentCenter = view && projectedCenter
+        ? toLonLat(projectedCenter, view.getProjection()) as [number, number]
+        : mapCenter;
+      const currentOpenLayersZoom = view?.getZoom() ?? mapZoom;
+      const camera: Terrain3DCamera = {
+        center: currentCenter,
         // MapLibre's 512-pixel world tiles use a zoom one level lower than OpenLayers.
-        zoom: Math.max(1, Math.min(18, mapZoom - 1)),
-        bearing: 0,
-        pitch: 58,
-      });
+        zoom: Math.max(1, Math.min(18, currentOpenLayersZoom - 1)),
+        bearing: terrainCameraRef.current?.bearing ?? 0,
+        pitch: terrainCameraRef.current?.pitch ?? 58,
+      };
+      setMapCenter(currentCenter);
+      setMapZoom(currentOpenLayersZoom);
+      terrainCameraRef.current = camera;
+      setTerrainCamera(camera);
+    } else {
+      const currentCamera = terrainCameraReaderRef.current?.() ?? terrainCameraRef.current;
+      if (currentCamera) {
+        terrainCameraRef.current = currentCamera;
+        setTerrainCamera(currentCamera);
+        setMapCenter(currentCamera.center);
+        setMapZoom(currentCamera.zoom + 1);
+      }
     }
     setViewMode(nextMode);
   };
 
   const handleTerrainCameraChange = useCallback((camera: Terrain3DCamera) => {
+    terrainCameraRef.current = camera;
     setTerrainCamera(camera);
     setMapCenter(camera.center);
     setMapZoom(camera.zoom + 1);
+  }, []);
+
+  const handleTerrainCameraReaderChange = useCallback((reader: (() => Terrain3DCamera) | null) => {
+    terrainCameraReaderRef.current = reader;
   }, []);
 
   const handleTerrainStyleChange = useCallback((style: OpenFreeMapId) => {
@@ -642,6 +671,7 @@ export default function App() {
   const resetView = () => {
     if (viewMode === "3d") {
       const camera: Terrain3DCamera = { center: [...CRETE_CENTER], zoom: 6.6, bearing: 0, pitch: 58 };
+      terrainCameraRef.current = camera;
       setMapCenter(camera.center);
       setMapZoom(camera.zoom + 1);
       setTerrainCamera(camera);
@@ -1186,6 +1216,7 @@ export default function App() {
                 theme={theme}
                 navigationRevision={terrainNavigationRevision}
                 onCameraChange={handleTerrainCameraChange}
+                onCameraReaderChange={handleTerrainCameraReaderChange}
                 onStyleChange={handleTerrainStyleChange}
                 onExaggerationChange={setTerrainExaggeration}
               />
