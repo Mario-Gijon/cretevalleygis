@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Check, Ellipsis, MapPin, Pencil, Pentagon, Route, Scale, Trash2, X } from "lucide-react";
 import type { DrawnElement } from "@/hooks/useDrawingTools";
 import { formatArea, formatCoordinate, formatDistance } from "@/lib/geometry-metrics";
+import { isSurfaceGeometryType } from "@/lib/geometry-types";
 
 type DrawnElementsListProps = {
   elements: DrawnElement[];
@@ -16,12 +17,13 @@ const geometryLabels = {
   Point: "Punto",
   LineString: "Línea",
   Polygon: "Área",
+  MultiPolygon: "Área compuesta",
 } as const;
 
 export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, onDelete, onCompare }: DrawnElementsListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
-  const polygonCount = elements.filter((element) => element.geometryType === "Polygon").length;
+  const polygonCount = elements.filter((element) => isSurfaceGeometryType(element.geometryType)).length;
 
   return (
     <section className="drawn-elements-section" aria-labelledby="drawn-elements-title">
@@ -49,7 +51,7 @@ export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, on
               ? `${formatCoordinate(element.geometryInfo.latitude, "N", "S")} · ${formatCoordinate(element.geometryInfo.longitude, "E", "O")}`
               : element.geometryInfo?.kind === "LineString"
                 ? formatDistance(element.geometryInfo.length)
-                : element.geometryInfo?.kind === "Polygon"
+                : element.geometryInfo?.kind === "Area"
                   ? formatArea(element.geometryInfo.area)
                   : null;
             return (
@@ -82,6 +84,9 @@ export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, on
                         <span className="drawn-element-name">{element.name}</span>
                         <span className="drawn-element-meta">
                           <span className="drawn-element-type">{geometryLabels[element.geometryType]}</span>
+                          {element.geometryInfo?.kind === "Area" && element.geometryType === "MultiPolygon" && (
+                            <span className="drawn-element-measure">{element.geometryInfo.polygonCount} polígonos</span>
+                          )}
                           {measure && <span className="drawn-element-measure">{measure}</span>}
                         </span>
                       </span>

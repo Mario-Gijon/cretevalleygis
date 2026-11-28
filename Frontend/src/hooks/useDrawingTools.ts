@@ -4,6 +4,7 @@ import Feature from "ol/Feature.js";
 import type { FeatureLike } from "ol/Feature.js";
 import type Geometry from "ol/geom/Geometry.js";
 import LineString from "ol/geom/LineString.js";
+import MultiPolygon from "ol/geom/MultiPolygon.js";
 import Polygon from "ol/geom/Polygon.js";
 import Draw from "ol/interaction/Draw.js";
 import Interaction from "ol/interaction/Interaction.js";
@@ -23,13 +24,14 @@ import CircleStyle from "ol/style/Circle.js";
 import Fill from "ol/style/Fill.js";
 import Stroke from "ol/style/Stroke.js";
 import Style from "ol/style/Style.js";
-import GeoJSON, { type GeoJSONLineString, type GeoJSONPoint, type GeoJSONPolygon } from "ol/format/GeoJSON.js";
+import GeoJSON, { type GeoJSONLineString, type GeoJSONPoint } from "ol/format/GeoJSON.js";
 import { getGeometryInfo, getMeasurementResult, type GeometryInfo, type MeasurementResult } from "@/lib/geometry-metrics";
+import { isSurfaceGeometryType, type DrawingGeometryType, type GeoJSONSurfaceGeometry } from "@/lib/geometry-types";
 
 export type DrawingTool = "navigate" | "point" | "line" | "polygon" | "select" | "modify";
 export type MeasurementTool = "measure-distance" | "measure-area";
 export type MapTool = DrawingTool | MeasurementTool;
-export type DrawingGeometry = "Point" | "LineString" | "Polygon";
+export type DrawingGeometry = DrawingGeometryType;
 
 export type DrawnElement = {
   id: string;
@@ -38,7 +40,7 @@ export type DrawnElement = {
   geometryRevision: number;
   geometryInfo?: GeometryInfo;
   geoJsonPoint?: GeoJSONPoint;
-  geoJsonGeometry?: GeoJSONPolygon;
+  geoJsonGeometry?: GeoJSONSurfaceGeometry;
   geoJsonLineString?: GeoJSONLineString;
   bboxWgs84?: [number, number, number, number];
 };
@@ -46,10 +48,11 @@ export type DrawnElement = {
 export type SelectedElementInfo = {
   id: string;
   name: string;
+  geometryType: DrawingGeometry;
   geometry: GeometryInfo;
   geometryRevision: number;
   geoJsonPoint?: GeoJSONPoint;
-  geoJsonGeometry?: GeoJSONPolygon;
+  geoJsonGeometry?: GeoJSONSurfaceGeometry;
   geoJsonLineString?: GeoJSONLineString;
   bboxWgs84?: [number, number, number, number];
 } | null;
@@ -73,6 +76,7 @@ const geometryNames: Record<DrawingGeometry, string> = {
   Point: "Punto",
   LineString: "Línea",
   Polygon: "Área",
+  MultiPolygon: "Área",
 };
 
 const geoJsonFormat = new GeoJSON();
@@ -80,14 +84,14 @@ const geoJsonFormat = new GeoJSON();
 function geometryAsWgs84GeoJson(
   geometry: Geometry | undefined,
   projection: ProjectionLike,
-): { geoJsonPoint?: GeoJSONPoint; geoJsonGeometry?: GeoJSONPolygon; geoJsonLineString?: GeoJSONLineString } {
-  if (!(geometry instanceof Point) && !(geometry instanceof Polygon) && !(geometry instanceof LineString)) return {};
+): { geoJsonPoint?: GeoJSONPoint; geoJsonGeometry?: GeoJSONSurfaceGeometry; geoJsonLineString?: GeoJSONLineString } {
+  if (!(geometry instanceof Point) && !(geometry instanceof Polygon) && !(geometry instanceof MultiPolygon) && !(geometry instanceof LineString)) return {};
   const geoJson = geoJsonFormat.writeGeometryObject(geometry, {
     featureProjection: projection,
     dataProjection: "EPSG:4326",
   });
   if (geoJson.type === "Point") return { geoJsonPoint: geoJson };
-  if (geoJson.type === "Polygon") return { geoJsonGeometry: geoJson };
+  if (geoJson.type === "Polygon" || geoJson.type === "MultiPolygon") return { geoJsonGeometry: geoJson };
   if (geoJson.type === "LineString" && geoJson.coordinates.length >= 2) return { geoJsonLineString: geoJson };
   return {};
 }
@@ -208,7 +212,7 @@ export function useDrawingTools() {
   const mapRef = useRef<OlMap | null>(null);
   const tracePausedRef = useRef(false);
   const nextIdRef = useRef(1);
-  const countsRef = useRef<Record<DrawingGeometry, number>>({ Point: 0, LineString: 0, Polygon: 0 });
+  const countsRef = useRef<Record<DrawingGeometry, number>>({ Point: 0, LineString: 0, Polygon: 0, MultiPolygon: 0 });
 
   const refreshElements = useCallback(() => {
     setElements(
@@ -220,7 +224,7 @@ export function useDrawingTools() {
         const geometryInfo = geometry && projection ? getGeometryInfo(geometry, projection) : null;
         const geoJson = geometryAsWgs84GeoJson(geometry, projection ?? "EPSG:3857");
         const geometryRevision = geometry?.getRevision() ?? 0;
-        const bboxWgs84 = geometry instanceof Polygon && projection
+        const bboxWgs84 = geometry && isSurfaceGeometryType(geometryType) && projection
           ? transformExtent(geometry.getExtent(), projection, "EPSG:4326", 8) as [number, number, number, number]
           : undefined;
         return {
@@ -246,11 +250,12 @@ export function useDrawingTools() {
     }
     const feature = selected[0];
     const geometry = feature.getGeometry();
+    const geometryType = geometry?.getType() as DrawingGeometry | undefined;
     const projection = mapRef.current?.getView().getProjection();
     const geometryInfo = geometry && projection ? getGeometryInfo(geometry, projection) : null;
     const geoJson = geometryAsWgs84GeoJson(geometry, projection ?? "EPSG:3857");
     const geometryRevision = geometry?.getRevision() ?? 0;
-    const bboxWgs84 = geometry instanceof Polygon && projection
+    const bboxWgs84 = geometry && isSurfaceGeometryType(geometry.getType()) && projection
       ? transformExtent(geometry.getExtent(), projection, "EPSG:4326", 8) as [number, number, number, number]
       : undefined;
     setSelectedElementInfo(
@@ -258,6 +263,7 @@ export function useDrawingTools() {
         ? {
             id: String(feature.getId() ?? ""),
             name: String(feature.get("name") ?? "Elemento"),
+            geometryType: geometryType ?? "Point",
             geometry: geometryInfo,
             geometryRevision,
             ...geoJson,
@@ -588,21 +594,23 @@ export function useDrawingTools() {
     refreshSelection();
   }, [refreshElements, refreshSelection, source]);
 
-  const addPolygonFromGeoJSON = useCallback((geoJson: GeoJSONPolygon, name: string): string | null => {
+  const addSurfaceGeometryFromGeoJSON = useCallback((geoJson: GeoJSONSurfaceGeometry, name: string): string | null => {
     const projection = mapRef.current?.getView().getProjection();
-    if (!projection || geoJson.type !== "Polygon") return null;
+    if (!projection || !isSurfaceGeometryType(geoJson.type)) return null;
     const geometry = geoJsonFormat.readGeometry(geoJson, {
       dataProjection: "EPSG:4326",
       featureProjection: projection,
     });
-    if (!(geometry instanceof Polygon) || geometry.getCoordinates().length === 0) return null;
+    if (!(geometry instanceof Polygon) && !(geometry instanceof MultiPolygon)) return null;
+    const geometryType = geometry.getType() as DrawingGeometry;
+    if (geometryType !== geoJson.type || geometry.getCoordinates().length === 0) return null;
 
     const feature = new Feature<Geometry>({ geometry });
     const id = `drawing-${nextIdRef.current++}`;
     feature.setId(id);
     feature.set("name", name.trim() || "Zona de influencia");
     source.addFeature(feature);
-    countsRef.current.Polygon += 1;
+    countsRef.current[geometryType] += 1;
 
     const selectedFeatures = selectedFeaturesRef.current;
     selectedFeatures?.clear();
@@ -638,6 +646,6 @@ export function useDrawingTools() {
     deleteSelected,
     deleteElement,
     renameElement,
-    addPolygonFromGeoJSON,
+    addSurfaceGeometryFromGeoJSON,
   };
 }

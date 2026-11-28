@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import {
   Check,
@@ -49,6 +49,7 @@ import { useGeometryBuffer } from "@/hooks/useGeometryBuffer";
 import { usePointInspector } from "@/hooks/usePointInspector";
 import { usePlaceSearchMarker } from "@/hooks/usePlaceSearchMarker";
 import { useTerrainAnalysis } from "@/hooks/useTerrainAnalysis";
+import { isSurfaceGeometryType } from "@/lib/geometry-types";
 import { OBJECTIVE_CRITERIA } from "@/lib/objective-criteria";
 import { CRETE_CENTER } from "@/lib/map-config";
 import type { SearchSelection } from "@/lib/place-search";
@@ -394,7 +395,10 @@ export default function App() {
     : baseMap === "osm" || baseMap === "qgis" ? null : baseMap;
   const selectedVectorStatus = selectedVectorBaseMap ? openFreeMapStatus[selectedVectorBaseMap] : "idle";
   const selectedElement = drawingTools.selectedElementInfo;
-  const polygonElements = drawingTools.elements.filter((element) => element.geometryType === "Polygon");
+  const areaElements = useMemo(
+    () => drawingTools.elements.filter((element) => isSurfaceGeometryType(element.geometryType)),
+    [drawingTools.elements],
+  );
   const explorationTerrainTheme: ExplorationTerrainTheme = terrainThemeForBaseMap(baseMap) ?? "none";
   const selectedTerrainTheme: TerrainTheme = terrainThemeForBaseMap(baseMap) ?? "elevation";
   const explorationThemeOpacity = explorationThemeOpacities[selectedTerrainTheme];
@@ -416,16 +420,16 @@ export default function App() {
   }, [drawingTools.elements, terrainAnalysis.syncAreas]);
 
   useEffect(() => {
-    const polygonIds = new Set(polygonElements.map((element) => element.id));
+    const polygonIds = new Set(areaElements.map((element) => element.id));
     setComparisonAreaIds((current) => {
       if (current === null) return null;
       const next = current.filter((id) => polygonIds.has(id));
       return next.length === current.length ? current : next;
     });
-  }, [drawingTools.elements]);
+  }, [drawingTools.elements, areaElements]);
 
   const openAreaComparison = () => {
-    setComparisonAreaIds((current) => current ?? polygonElements.slice(0, 2).map((element) => element.id));
+    setComparisonAreaIds((current) => current ?? areaElements.slice(0, 2).map((element) => element.id));
     setComparisonOpen(true);
   };
 
@@ -856,7 +860,7 @@ export default function App() {
             batchBusy={terrainAnalysis.batchState?.phase === "running" || terrainAnalysis.batchState?.phase === "stopping"}
             onBackToList={() => setAreaPanelView("list")}
             onAnalyzeArea={() => {
-              if (selectedElement.geometry.kind !== "Polygon" || !selectedElement.geoJsonGeometry) return;
+              if (selectedElement.geometry.kind !== "Area" || !selectedElement.geoJsonGeometry) return;
               void terrainAnalysis.analyzeArea(
                 selectedElement.id,
                 selectedElement.name,
@@ -886,12 +890,12 @@ export default function App() {
               );
             }}
             onConfirmBuffer={(name) => {
-              const generatedPolygon = geometryBuffer.getConfirmablePolygon(
+              const generatedSurface = geometryBuffer.getConfirmableSurfaceGeometry(
                 selectedElement.id,
                 selectedElement.geometryRevision,
               );
-              if (!generatedPolygon) return;
-              const id = drawingTools.addPolygonFromGeoJSON(generatedPolygon, name);
+              if (!generatedSurface) return;
+              const id = drawingTools.addSurfaceGeometryFromGeoJSON(generatedSurface, name);
               if (id) geometryBuffer.clearPreview();
             }}
             onCancelBuffer={geometryBuffer.clearPreview}
@@ -1104,10 +1108,10 @@ export default function App() {
         </section>
       </main>
       {comparisonOpen && <ObjectiveAreaComparison
-        areas={polygonElements}
+        areas={areaElements}
         analyses={terrainAnalysis.analyses}
         batchState={terrainAnalysis.batchState}
-        selectedAreaIds={comparisonAreaIds ?? polygonElements.slice(0, 2).map((element) => element.id)}
+        selectedAreaIds={comparisonAreaIds ?? areaElements.slice(0, 2).map((element) => element.id)}
         onSelectedAreaIdsChange={setComparisonAreaIds}
         selectedCriterionIds={comparisonCriterionIds}
         onSelectedCriterionIdsChange={setComparisonCriterionIds}

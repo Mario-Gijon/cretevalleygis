@@ -62,8 +62,8 @@ def _wgs84_spatial_reference() -> osr.SpatialReference:
 def _load_and_validate_geometry(geojson_geometry: dict[str, Any]) -> tuple[ogr.Geometry, tuple[float, float, float, float]]:
     if not isinstance(geojson_geometry, dict):
         raise GeometryOperationError("geometry debe ser una geometría GeoJSON.")
-    if geojson_geometry.get("type") not in {"Point", "LineString", "Polygon"}:
-        raise GeometryOperationError("Solo se admiten GeoJSON Point, LineString y Polygon.")
+    if geojson_geometry.get("type") not in {"Point", "LineString", "Polygon", "MultiPolygon"}:
+        raise GeometryOperationError("Solo se admiten GeoJSON Point, LineString, Polygon y MultiPolygon.")
 
     try:
         geometry_json = json.dumps(geojson_geometry, ensure_ascii=False, allow_nan=False)
@@ -73,8 +73,8 @@ def _load_and_validate_geometry(geojson_geometry: dict[str, Any]) -> tuple[ogr.G
 
     if geometry is None or geometry.IsEmpty():
         raise GeometryOperationError("La geometría está vacía o no se puede leer.")
-    if geometry.GetGeometryName().upper() not in {"POINT", "LINESTRING", "POLYGON"}:
-        raise GeometryOperationError("Solo se admiten GeoJSON Point, LineString y Polygon.")
+    if geometry.GetGeometryName().upper() not in {"POINT", "LINESTRING", "POLYGON", "MULTIPOLYGON"}:
+        raise GeometryOperationError("Solo se admiten GeoJSON Point, LineString, Polygon y MultiPolygon.")
     if not geometry.IsValid():
         raise GeometryOperationError("La geometría no es topológicamente válida.")
 
@@ -87,6 +87,8 @@ def _load_and_validate_geometry(geojson_geometry: dict[str, Any]) -> tuple[ogr.G
         raise GeometryOperationError("La línea necesita al menos dos vértices.")
     if geometry.GetGeometryName().upper() == "POLYGON" and vertex_count < 4:
         raise GeometryOperationError("El área necesita un anillo cerrado con al menos tres vértices.")
+    if geometry.GetGeometryName().upper() == "MULTIPOLYGON" and vertex_count < 4:
+        raise GeometryOperationError("El área compuesta necesita al menos un polígono válido.")
 
     min_x, max_x, min_y, max_y = geometry.GetEnvelope()
     if not all(math.isfinite(value) for value in (min_x, max_x, min_y, max_y)):
@@ -197,12 +199,6 @@ def create_buffer(geojson_geometry: dict[str, Any], distance_m: float) -> dict[s
         "POLYGON": "Polygon",
         "MULTIPOLYGON": "MultiPolygon",
     }
-    warnings = []
-    if result_type == "MULTIPOLYGON":
-        warnings.append(
-            "El resultado contiene varios polígonos. La interfaz actual no puede incorporarlos sin descartar componentes; no se puede confirmar esta vista previa."
-        )
-
     return {
         "operation": "buffer",
         "input_geometry_type": geometry_type_names[geometry_wgs84.GetGeometryName().upper()],
@@ -210,5 +206,5 @@ def create_buffer(geojson_geometry: dict[str, Any], distance_m: float) -> dict[s
         "distance_m": float(distance_m),
         "processing_crs": processing_crs,
         "geometry": result_geometry,
-        "warnings": warnings,
+        "warnings": [],
     }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DrawnElement } from "@/hooks/useDrawingTools";
+import { isSurfaceGeometryType } from "@/lib/geometry-types";
 import type {
   AreaAnalysisState,
   TerrainAnalysisGeometry,
@@ -168,7 +169,7 @@ export function useTerrainAnalysis() {
   const syncAreas = useCallback((elements: DrawnElement[]) => {
     const currentAreas = new Map(
       elements
-        .filter((element) => element.geometryType === "Polygon")
+        .filter((element) => isSurfaceGeometryType(element.geometryType))
         .map((element) => [element.id, element.geometryRevision] as const),
     );
     const next = { ...analysesRef.current };
@@ -451,7 +452,7 @@ export function useTerrainAnalysis() {
     if (batchTaskRef.current) return batchTaskRef.current;
 
     const snapshot = selectedAreas
-      .filter((area) => area.geometryType === "Polygon" && area.geoJsonGeometry)
+      .filter((area) => isSurfaceGeometryType(area.geometryType) && area.geoJsonGeometry)
       .map((area) => ({
         id: area.id,
         name: area.name,

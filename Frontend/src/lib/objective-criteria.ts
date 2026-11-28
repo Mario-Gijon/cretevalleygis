@@ -97,11 +97,11 @@ const analyticalCriterion = (
 ): ObjectiveCriterion => ({ id, name, description, unit, category, dependencies: [category], getValue });
 
 export const OBJECTIVE_CRITERIA: readonly ObjectiveCriterion[] = [
-  geometryCriterion("geometry-area-ha", "Superficie", "Superficie geodésica actual del polígono.", "ha", ({ area }) => (
-    area.geometryInfo?.kind === "Polygon" ? area.geometryInfo.area / 10_000 : null
+  geometryCriterion("geometry-area-ha", "Superficie", "Superficie geodésica actual del área.", "ha", ({ area }) => (
+    area.geometryInfo?.kind === "Area" ? area.geometryInfo.area / 10_000 : null
   )),
-  geometryCriterion("geometry-perimeter-m", "Perímetro", "Perímetro geodésico actual del polígono.", "m", ({ area }) => (
-    area.geometryInfo?.kind === "Polygon" ? area.geometryInfo.perimeter : null
+  geometryCriterion("geometry-perimeter-m", "Perímetro", "Perímetro geodésico actual del área.", "m", ({ area }) => (
+    area.geometryInfo?.kind === "Area" ? area.geometryInfo.perimeter : null
   )),
 
   analyticalCriterion("elevation-minimum-m", "Elevación mínima", "Valor mínimo de elevación dentro de los píxeles válidos.", "m", "elevation", (context) => statistic(context, "elevation", "minimum")),

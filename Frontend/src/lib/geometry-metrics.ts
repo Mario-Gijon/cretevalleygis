@@ -1,15 +1,17 @@
 import type Geometry from "ol/geom/Geometry.js";
 import LineString from "ol/geom/LineString.js";
+import MultiPolygon from "ol/geom/MultiPolygon.js";
 import Point from "ol/geom/Point.js";
 import Polygon from "ol/geom/Polygon.js";
 import { getArea, getLength } from "ol/sphere.js";
 import { toLonLat } from "ol/proj.js";
 import type { ProjectionLike } from "ol/proj.js";
+import type { SurfaceGeometryType } from "@/lib/geometry-types";
 
 export type GeometryInfo =
   | { kind: "Point"; longitude: number; latitude: number }
   | { kind: "LineString"; length: number; vertices: number }
-  | { kind: "Polygon"; area: number; perimeter: number; vertices: number };
+  | { kind: "Area"; geometryType: SurfaceGeometryType; area: number; perimeter: number; vertices: number; polygonCount: number };
 
 export type MeasurementResult =
   | { kind: "distance"; value: number; vertices: number }
@@ -35,13 +37,20 @@ export function getGeometryInfo(geometry: Geometry, projection: ProjectionLike):
     };
   }
 
-  if (geometry instanceof Polygon) {
-    const rings = geometry.getCoordinates();
+  if (geometry instanceof Polygon || geometry instanceof MultiPolygon) {
+    const polygonCoordinates = geometry instanceof Polygon
+      ? [geometry.getCoordinates()]
+      : geometry.getCoordinates();
     return {
-      kind: "Polygon",
+      kind: "Area",
+      geometryType: geometry.getType() as SurfaceGeometryType,
       area: getArea(geometry, { projection }),
       perimeter: getLength(geometry, { projection }),
-      vertices: rings.reduce((count, ring) => count + Math.max(0, ring.length - 1), 0),
+      vertices: polygonCoordinates.reduce((total, rings) => total + rings.reduce(
+        (count, ring) => count + Math.max(0, ring.length - 1),
+        0,
+      ), 0),
+      polygonCount: polygonCoordinates.length,
     };
   }
 

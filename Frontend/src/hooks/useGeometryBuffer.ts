@@ -1,21 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Feature from "ol/Feature.js";
 import type Geometry from "ol/geom/Geometry.js";
+import MultiPolygon from "ol/geom/MultiPolygon.js";
 import Polygon from "ol/geom/Polygon.js";
-import GeoJSON, { type GeoJSONLineString, type GeoJSONPoint, type GeoJSONPolygon } from "ol/format/GeoJSON.js";
+import GeoJSON, { type GeoJSONLineString, type GeoJSONPoint } from "ol/format/GeoJSON.js";
 import VectorLayer from "ol/layer/Vector.js";
 import VectorSource from "ol/source/Vector.js";
 import { Fill, Stroke, Style } from "ol/style.js";
 import type { DrawingGeometry } from "@/hooks/useDrawingTools";
+import { isSurfaceGeometryType, type GeoJSONSurfaceGeometry } from "@/lib/geometry-types";
 
-export type BufferInputGeometry = GeoJSONPoint | GeoJSONLineString | GeoJSONPolygon;
+export type BufferInputGeometry = GeoJSONPoint | GeoJSONLineString | GeoJSONSurfaceGeometry;
 
 export type GeometryBufferState = {
   status: "loading" | "preview" | "error";
   sourceId: string;
   geometryRevision: number;
   distanceMeters: number;
-  geometry?: GeoJSONPolygon;
+  geometry?: GeoJSONSurfaceGeometry;
   processingCrs?: string;
   warnings: string[];
   message?: string;
@@ -32,7 +34,7 @@ type BufferApiResponse = {
   result_geometry_type?: string;
   distance_m?: number;
   processing_crs?: string;
-  geometry?: GeoJSONPolygon | { type: string; coordinates: unknown };
+  geometry?: GeoJSONSurfaceGeometry | { type: string; coordinates: unknown };
   warnings?: string[];
 };
 
@@ -146,8 +148,7 @@ export function useGeometryBuffer() {
 
       const result = body as BufferApiResponse;
       const warnings = Array.isArray(result.warnings) ? result.warnings : [];
-      if (!result.geometry || result.geometry.type !== "Polygon") {
-        const unsupported = result.geometry?.type === "MultiPolygon" || result.result_geometry_type === "MultiPolygon";
+      if (!result.geometry || !isSurfaceGeometryType(result.geometry.type)) {
         publish({
           status: "error",
           sourceId,
@@ -155,9 +156,7 @@ export function useGeometryBuffer() {
           distanceMeters,
           processingCrs: result.processing_crs,
           warnings,
-          message: unsupported
-            ? "El resultado contiene varios polígonos. La vista previa no se puede confirmar sin descartar ninguno; el soporte completo llegará en un hito posterior."
-            : "El backend devolvió una geometría vacía o no compatible con la incorporación actual.",
+          message: "El backend devolvió una geometría vacía o no compatible con la incorporación actual.",
         });
         return;
       }
@@ -168,7 +167,7 @@ export function useGeometryBuffer() {
         dataProjection: "EPSG:4326",
         featureProjection: "EPSG:3857",
       });
-      if (!(projectedGeometry instanceof Polygon) || projectedGeometry.getCoordinates().length === 0) {
+      if (!(projectedGeometry instanceof Polygon) && !(projectedGeometry instanceof MultiPolygon)) {
         publish({
           status: "error",
           sourceId,
@@ -176,7 +175,19 @@ export function useGeometryBuffer() {
           distanceMeters,
           processingCrs: result.processing_crs,
           warnings,
-          message: "El backend devolvió un polígono que no se puede mostrar en el mapa.",
+          message: "El backend devolvió una geometría de superficie que no se puede mostrar en el mapa.",
+        });
+        return;
+      }
+      if (projectedGeometry.getType() !== result.geometry.type || projectedGeometry.getCoordinates().length === 0) {
+        publish({
+          status: "error",
+          sourceId,
+          geometryRevision,
+          distanceMeters,
+          processingCrs: result.processing_crs,
+          warnings,
+          message: "El backend devolvió una geometría de superficie vacía o incompatible.",
         });
         return;
       }
@@ -208,7 +219,7 @@ export function useGeometryBuffer() {
     }
   }, [previewSource, publish]);
 
-  const getConfirmablePolygon = useCallback((sourceId: string, geometryRevision: number): GeoJSONPolygon | null => {
+  const getConfirmableSurfaceGeometry = useCallback((sourceId: string, geometryRevision: number): GeoJSONSurfaceGeometry | null => {
     const current = bufferStateRef.current;
     const sourceElement = currentElementsRef.current.get(sourceId);
     if (current?.status !== "preview" || current.sourceId !== sourceId
@@ -227,7 +238,7 @@ export function useGeometryBuffer() {
     previewLayer,
     syncElements,
     generatePreview,
-    getConfirmablePolygon,
+    getConfirmableSurfaceGeometry,
     clearPreview,
   };
 }

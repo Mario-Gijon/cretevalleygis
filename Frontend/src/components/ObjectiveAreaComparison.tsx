@@ -244,7 +244,7 @@ export function ObjectiveAreaComparison({
               <div className="comparison-control-heading">
                 <div>
                   <h3 id="comparison-areas-title">Áreas incluidas</h3>
-                  <p>Selecciona los polígonos que quieres comparar.</p>
+                  <p>Selecciona las áreas que quieres comparar.</p>
                 </div>
                 <span>{selectedAreas.length}</span>
               </div>

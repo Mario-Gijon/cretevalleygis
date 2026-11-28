@@ -36,7 +36,13 @@ export function GeometryDetails({ element, analysis, batchBusy = false, elevatio
 
   const rename = () => onRename(element.id, name);
   const value = element.geometry;
-  const geometryLabel = value.kind === "Point" ? "Punto" : value.kind === "LineString" ? "Línea" : "Área";
+  const geometryLabel = value.kind === "Point"
+    ? "Punto"
+    : value.kind === "LineString"
+      ? "Línea"
+      : element.geometryType === "MultiPolygon"
+        ? `Área compuesta · ${value.polygonCount} polígonos`
+        : "Área";
 
   return (
     <section className="geometry-details" aria-labelledby="geometry-details-title">
@@ -74,11 +80,12 @@ export function GeometryDetails({ element, analysis, batchBusy = false, elevatio
             <div><dt>Vértices</dt><dd>{value.vertices}</dd></div>
           </>
         )}
-        {value.kind === "Polygon" && (
+        {value.kind === "Area" && (
           <>
             <div><dt>Superficie</dt><dd>{formatArea(value.area)}</dd></div>
             <div><dt>Perímetro</dt><dd>{formatDistance(value.perimeter)}</dd></div>
             <div><dt>Vértices</dt><dd>{value.vertices}</dd></div>
+            {value.geometryType === "MultiPolygon" && <div><dt>Polígonos</dt><dd>{value.polygonCount}</dd></div>}
           </>
         )}
       </dl>
@@ -117,7 +124,7 @@ export function GeometryDetails({ element, analysis, batchBusy = false, elevatio
           {elevationProfile?.status === "partial" && !elevationProfile.result && <p className="geometry-profile-message">{elevationProfile.message}</p>}
         </section>
       )}
-      {value.kind === "Polygon" && element.geoJsonGeometry && (
+      {value.kind === "Area" && element.geoJsonGeometry && (
         <TerrainAnalysisPanel
           analysis={analysis?.geometryRevision === element.geometryRevision ? analysis : analysis ? {
             geometryRevision: element.geometryRevision,
