@@ -132,6 +132,174 @@ button {
   height: 100%;
 }
 
+.app-header > .place-search-control {
+  flex: 0 1 360px;
+  width: min(360px, 40vw);
+  min-width: 190px;
+  margin: 0 auto;
+}
+
+.place-search-control {
+  position: relative;
+  z-index: 12;
+}
+
+.place-search-input-wrap {
+  display: flex;
+  min-width: 0;
+  height: 38px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface-raised);
+  color: var(--muted);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.place-search-input-wrap:focus-within {
+  border-color: color-mix(in srgb, var(--cv-teal) 72%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cv-teal) 16%, transparent);
+}
+
+.place-search-input-wrap input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+}
+
+.place-search-input-wrap input::placeholder {
+  color: var(--muted);
+  opacity: 0.9;
+}
+
+.place-search-input-wrap input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.place-search-clear {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.place-search-clear:hover,
+.place-search-clear:focus-visible {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.place-search-results {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 7px);
+  left: 50%;
+  width: min(430px, calc(100vw - 24px));
+  max-height: min(58vh, 420px);
+  padding: 5px;
+  overflow: auto;
+  transform: translateX(-50%);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  box-shadow: 0 10px 32px rgb(5 41 76 / 18%);
+}
+
+.place-search-option {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--cv-blue);
+  text-align: left;
+  cursor: pointer;
+}
+
+.place-search-option:hover,
+.place-search-option--active,
+.place-search-option:focus-visible {
+  outline: 0;
+  background: var(--surface-soft);
+}
+
+.place-search-option__copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.place-search-option__copy strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.place-search-option__copy small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.place-search-type {
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.place-search-state,
+.place-search-source {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  padding: 10px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.place-search-state--error {
+  color: #a7372e;
+}
+
+.app-shell[data-theme="dark"] .place-search-state--error {
+  color: #ffaaa3;
+}
+
+.place-search-source {
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
+  font-size: 8px;
+}
+
 .header-separator {
   width: 1px;
   height: 22px;
@@ -3429,6 +3597,27 @@ button {
     padding: 0 13px;
   }
 
+  .app-header > .place-search-control {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    margin: 0 8px;
+  }
+
+  .place-search-input-wrap {
+    height: 35px;
+    gap: 6px;
+    padding: 0 8px;
+  }
+
+  .place-search-input-wrap input {
+    font-size: 10px;
+  }
+
+  .place-search-results {
+    max-height: 55vh;
+  }
+
   .brand-mark {
     width: 32px;
     height: 32px;
@@ -3604,14 +3793,46 @@ button {
 }
 
 @media (max-width: 420px) {
+  .app-header {
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+
+  .brand-lockup {
+    gap: 8px;
+  }
+
+  .brand-mark {
+    width: 30px;
+    height: 30px;
+  }
+
   .brand-name {
-    gap: 5px;
-    font-size: 13px;
+    gap: 4px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .app-header > .place-search-control {
+    margin-right: 6px;
+    margin-left: 6px;
+  }
+
+  .header-actions {
+    gap: 4px;
+  }
+
+  .layers-button > span {
+    display: none;
+  }
+
+  .header-separator {
+    margin: 0;
   }
 
   .layers-button {
-    padding-right: 10px;
-    padding-left: 10px;
+    padding-right: 8px;
+    padding-left: 8px;
   }
 
   .map-status {

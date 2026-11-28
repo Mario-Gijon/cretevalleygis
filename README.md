@@ -116,6 +116,14 @@ Natural Earth publica los datos en dominio público; la atribución es opcional 
 
 La herramienta **Inspeccionar** consulta elevación al pulsar el mapa y mantiene un único marcador temporal, independiente del mapa base. Reutiliza la fuente, decodificación numérica, máscara de validez y caché Terrarium del relieve; empieza por z15 sin depender del zoom visible y busca hasta tres niveles padre (como mínimo z12) cuando falten muestras. La elevación se interpola solo con píxeles válidos. Pendiente y azimut de descenso usan diferencias centrales entre vecinos y el espaciado terrestre del píxel, corregido por latitud. Si no hay vecinos válidos, se muestra la elevación sin inventar derivadas; los píxeles NoData, los errores del servicio y las coordenadas fuera de Web Mercator se distinguen. El espaciado mostrado es nominal para la tesela consultada y no garantiza la resolución nativa de sus fuentes. El resultado es exploratorio: no crea geometrías permanentes ni trabajos zonales y no sustituye el análisis Copernicus de áreas.
 
+## Buscador geográfico
+
+El endpoint local `GET /api/search/places?q=Jaén` busca en los shapefiles Natural Earth 1:10m que ya existen en el volumen `qgis_world_data`: `admin_0_countries` (258 países y territorios) y `populated_places` (7.342 localidades en la copia preparada). El backend crea una sola vez por proceso un índice en memoria mediante GDAL/OGR y reutiliza los nombres normalizados en las peticiones. Considera los campos `NAME`, `NAMEASCII`, `NAMEPAR`, `NAMEALT`, `NAME_EN`, `NAME_ES` y, cuando existen, las traducciones griegas y francesas; países y localidades tienen identificadores Natural Earth estables. Los resultados incluyen tipo, país, región, coordenadas WGS84, extensión de países y fuente. La consulta admite de 2 a 80 caracteres y devuelve como máximo diez coincidencias, ordenadas por coincidencia exacta, prefijo y fragmento.
+
+El campo del frontend también acepta coordenadas decimales `latitud, longitud` o `latitud longitud`, por ejemplo `37.7796, -3.7849`. Las coordenadas se validan y navegan localmente, no llaman a la API. El servicio no consulta proveedores externos ni crea marcadores permanentes.
+
+Natural Earth es una cartografía generalizada: este catálogo no contiene calles, direcciones ni todas las poblaciones pequeñas, y no garantiza que exista una localidad concreta. El buscador no sustituye a un geocodificador detallado; muestra solo los países y lugares incluidos en la versión local de los datos.
+
 ## Licencias
 
 QWC2 conserva su licencia BSD-2-Clause y atribuciones originales en [`upstream/qwc2/LICENSE`](upstream/qwc2/LICENSE). QGIS Server conserva los avisos de licencia de su imagen oficial. Consulta [TERCEROS.md](TERCEROS.md) para las licencias y fuentes de software y datos.

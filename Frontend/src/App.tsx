@@ -21,7 +21,7 @@ import {
   Waves,
   X,
 } from "lucide-react";
-import { fromLonLat } from "ol/proj.js";
+import { fromLonLat, transformExtent } from "ol/proj.js";
 import type OlMap from "ol/Map.js";
 import MapView, { type BaseMapLayers, type MapStatus, type QgisStatus } from "@/components/MapView";
 import {
@@ -39,13 +39,16 @@ import { GeometryDetails } from "@/components/GeometryDetails";
 import { ObjectiveAreaComparison } from "@/components/ObjectiveAreaComparison";
 import { DrawingToolbar } from "@/components/DrawingToolbar";
 import { PointInspectorControl } from "@/components/PointInspectorControl";
+import { PlaceSearchControl } from "@/components/PlaceSearchControl";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useDrawingTools } from "@/hooks/useDrawingTools";
 import { usePointInspector } from "@/hooks/usePointInspector";
+import { usePlaceSearchMarker } from "@/hooks/usePlaceSearchMarker";
 import { useTerrainAnalysis } from "@/hooks/useTerrainAnalysis";
 import { OBJECTIVE_CRITERIA } from "@/lib/objective-criteria";
 import { CRETE_CENTER } from "@/lib/map-config";
+import type { SearchSelection } from "@/lib/place-search";
 import { formatCoordinate } from "@/lib/geometry-metrics";
 import {
   DEFAULT_OVERLAY_VISIBILITY,
@@ -147,6 +150,7 @@ export default function App() {
   const baseLayersRef = useRef<BaseMapLayers | null>(null);
   const drawingTools = useDrawingTools();
   const pointInspector = usePointInspector();
+  const placeSearchMarker = usePlaceSearchMarker();
   const terrainAnalysis = useTerrainAnalysis();
   const [theme, setTheme] = useState<ThemeMode>(initialTheme);
   const [panelOpen, setPanelOpen] = useState(
@@ -226,6 +230,42 @@ export default function App() {
     if (!pointInspector.active) drawingTools.setActiveTool("navigate");
     pointInspector.setEnabled(!pointInspector.active);
   }, [drawingTools.setActiveTool, pointInspector.active, pointInspector.setEnabled]);
+
+  const navigateToSearchSelection = useCallback((selection: SearchSelection) => {
+    const map = mapRef.current;
+    const view = map?.getView();
+    if (!map || !view) return;
+
+    if ("extent" in selection && selection.extent) {
+      placeSearchMarker.clear();
+      const [west, south, east, north] = selection.extent;
+      const mercatorLatitudeLimit = 85.05112878;
+      const projectedExtent = transformExtent(
+        [west, Math.max(-mercatorLatitudeLimit, south), east, Math.min(mercatorLatitudeLimit, north)],
+        "EPSG:4326",
+        view.getProjection(),
+      );
+      view.fit(projectedExtent, {
+        duration: 560,
+        maxZoom: 6.5,
+        padding: [92, 42, 64, 42],
+      });
+      return;
+    }
+
+    const [longitude, latitude] = selection.coordinates;
+    placeSearchMarker.show(longitude, latitude);
+    const zoom = selection.type === "coordinates"
+      ? 11.5
+      : selection.type === "capital" || selection.type === "regional-capital"
+        ? 10.5
+        : selection.type === "city" ? 10 : 11.5;
+    view.animate({
+      center: fromLonLat([longitude, latitude], view.getProjection()),
+      zoom,
+      duration: 560,
+    });
+  }, [placeSearchMarker.clear, placeSearchMarker.show]);
 
   const handleQgisStatusChange = useCallback((status: QgisStatus) => {
     setQgisStatus(status);
@@ -524,6 +564,8 @@ export default function App() {
             <span className="brand-product">GIS</span>
           </div>
         </div>
+
+        <PlaceSearchControl onSelect={navigateToSearchSelection} />
 
         <div className="header-actions flex items-center gap-2">
           <Button
@@ -841,6 +883,7 @@ export default function App() {
             drawingsLayer={drawingTools.layer}
             measurementsLayer={drawingTools.measurementLayer}
             pointInspectorLayer={pointInspector.layer}
+            placeSearchMarkerLayer={placeSearchMarker.layer}
             explorationTerrainEnabled={explorationTerrainEnabled}
             explorationTerrainOpacity={explorationTerrainOpacity}
             explorationTerrainTheme={explorationTerrainTheme}

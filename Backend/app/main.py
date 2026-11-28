@@ -16,7 +16,7 @@ import threading
 from typing import Any
 from urllib.parse import urlencode
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from osgeo import gdal
@@ -33,6 +33,7 @@ from terrain_derivative_config import DERIVATIVE_STYLE_VERSION
 from terrain_style_config import REGIONAL_ELEVATION_STYLE_VERSION, regional_elevation_style
 from app.zonal_statistics import SCHEMA_VERSION as ZONAL_STATISTICS_SCHEMA_VERSION
 from app.zonal_statistics import calculate_zonal_terrain_statistics, geometry_bbox_wgs84
+from app.place_search import PlaceSearchUnavailable, SOURCE_LABEL as PLACE_SEARCH_SOURCE, search_places
 
 
 REGION_ROOT = Path(os.environ.get("TERRAIN_REGION_ROOT", "/io/data/terrain/regions"))
@@ -1041,6 +1042,22 @@ def health() -> dict[str, str]:
     if not REGION_ROOT.is_dir() or not os.access(REGION_ROOT, os.W_OK):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="terrain storage is not writable")
     return {"status": "ok", "terrain_storage": "available"}
+
+
+@app.get("/api/search/places")
+def search_place_endpoint(q: str = Query(min_length=2, max_length=80)) -> dict[str, Any]:
+    query = q.strip()
+    if len(query) < 2:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="query must contain at least 2 characters")
+    try:
+        results = search_places(query)
+    except PlaceSearchUnavailable as error:
+        logger.warning("Natural Earth place search is unavailable: %s", error)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The local Natural Earth place catalog is unavailable.",
+        ) from error
+    return {"query": query, "source": PLACE_SEARCH_SOURCE, "results": results}
 
 
 @app.post("/api/terrain/jobs")

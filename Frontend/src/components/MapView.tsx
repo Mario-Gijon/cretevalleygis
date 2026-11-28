@@ -287,6 +287,7 @@ type MapViewProps = {
   drawingsLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
   measurementsLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
   pointInspectorLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
+  placeSearchMarkerLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
   explorationTerrainEnabled: boolean;
   explorationTerrainOpacity: number;
   explorationTerrainTheme: ExplorationTerrainTheme;
@@ -316,6 +317,7 @@ export default function MapView({
   drawingsLayer,
   measurementsLayer,
   pointInspectorLayer,
+  placeSearchMarkerLayer,
   explorationTerrainEnabled,
   explorationTerrainOpacity,
   explorationTerrainTheme,
@@ -457,6 +459,7 @@ export default function MapView({
         drawingsLayer,
         measurementsLayer,
         pointInspectorLayer,
+        placeSearchMarkerLayer,
       ],
       controls: defaultControls({
         attribution: false,
@@ -870,7 +873,7 @@ export default function MapView({
       updateExplorationRef.current = null;
       scheduleElevationScaleRef.current = null;
     };
-  }, [baseLayersRef, drawingsLayer, mapRef, measurementsLayer, pointInspectorLayer, onCenterChange, onMapReady, onOverlayAvailabilityChange, onQgisStatusChange, onStatusChange]);
+  }, [baseLayersRef, drawingsLayer, mapRef, measurementsLayer, pointInspectorLayer, placeSearchMarkerLayer, onCenterChange, onMapReady, onOverlayAvailabilityChange, onQgisStatusChange, onStatusChange]);
 
   useEffect(() => {
     const view = mapRef.current?.getView();
