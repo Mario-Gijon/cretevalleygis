@@ -701,6 +701,17 @@ button {
   border-top: 1px solid var(--border);
 }
 
+.geometry-preview-availability {
+  margin: 6px 0 0;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .geometry-profile-action .ui-button--outline,
 .geometry-profile-action .ui-button--ghost {
   min-height: 32px;

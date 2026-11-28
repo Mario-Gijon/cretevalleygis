@@ -7,6 +7,7 @@ import { isSurfaceGeometryType } from "@/lib/geometry-types";
 type DrawnElementsListProps = {
   elements: DrawnElement[];
   selectedIds: string[];
+  previewsAvailable?: boolean;
   onFocus: (id: string) => void;
   onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
@@ -21,7 +22,7 @@ const geometryLabels = {
   MultiPolygon: "Área compuesta",
 } as const;
 
-export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, onDelete, onCompare, onGeometryOperations }: DrawnElementsListProps) {
+export function DrawnElementsList({ elements, selectedIds, previewsAvailable = true, onFocus, onRename, onDelete, onCompare, onGeometryOperations }: DrawnElementsListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const polygonCount = elements.filter((element) => isSurfaceGeometryType(element.geometryType)).length;
@@ -42,7 +43,7 @@ export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, on
           <span className="drawn-elements-count" aria-label={`${elements.length} elementos`}>{elements.length}</span>
         </div>
       </div>
-      {polygonCount >= 2 && (
+      {polygonCount >= 2 && previewsAvailable && (
         <button
           type="button"
           className="drawn-elements-operations"
@@ -51,6 +52,9 @@ export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, on
         >
           <GitCompareArrows size={14} aria-hidden="true" /> Operaciones geométricas
         </button>
+      )}
+      {polygonCount >= 2 && !previewsAvailable && (
+        <p className="geometry-preview-availability">Vuelve a 2D para previsualizar operaciones entre áreas.</p>
       )}
       {elements.length === 0 ? (
         <p className="drawn-elements-empty">Dibuja un punto, una línea o un área para empezar.</p>

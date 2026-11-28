@@ -16,6 +16,7 @@ type GeometryDetailsProps = {
   elevationProfile?: ElevationProfileState;
   bufferState?: GeometryBufferState | null;
   bufferGeometry?: BufferInputGeometry;
+  previewActionsAvailable?: boolean;
   onBackToList: () => void;
   onAnalyzeArea: () => void;
   onResumeAnalysis: () => void;
@@ -27,7 +28,7 @@ type GeometryDetailsProps = {
   onCancelBuffer: () => void;
 };
 
-export function GeometryDetails({ element, analysis, batchBusy = false, elevationProfile, bufferState, bufferGeometry, onBackToList, onAnalyzeArea, onResumeAnalysis, onRename, onGenerateProfile, onCancelProfile, onGenerateBuffer, onConfirmBuffer, onCancelBuffer }: GeometryDetailsProps) {
+export function GeometryDetails({ element, analysis, batchBusy = false, elevationProfile, bufferState, bufferGeometry, previewActionsAvailable = true, onBackToList, onAnalyzeArea, onResumeAnalysis, onRename, onGenerateProfile, onCancelProfile, onGenerateBuffer, onConfirmBuffer, onCancelBuffer }: GeometryDetailsProps) {
   const [name, setName] = useState(element?.name ?? "");
 
   useEffect(() => setName(element?.name ?? ""), [element?.id, element?.name]);
@@ -89,7 +90,10 @@ export function GeometryDetails({ element, analysis, batchBusy = false, elevatio
           </>
         )}
       </dl>
-      {bufferGeometry && (
+      {!previewActionsAvailable && (bufferGeometry || (value.kind === "LineString" && element.geoJsonLineString)) && (
+        <p className="geometry-preview-availability">Vuelve a 2D para previsualizar buffers y perfiles.</p>
+      )}
+      {previewActionsAvailable && bufferGeometry && (
         <GeometryBufferControl
           key={`${element.id}-${element.geometryRevision}`}
           sourceName={element.name}
@@ -99,7 +103,7 @@ export function GeometryDetails({ element, analysis, batchBusy = false, elevatio
           onCancel={onCancelBuffer}
         />
       )}
-      {value.kind === "LineString" && element.geoJsonLineString && (
+      {previewActionsAvailable && value.kind === "LineString" && element.geoJsonLineString && (
         <section className="geometry-profile-action" aria-label="Perfil de elevación">
           <Button
             variant="outline"

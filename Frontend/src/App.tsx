@@ -46,6 +46,7 @@ import { PlaceSearchControl } from "@/components/PlaceSearchControl";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useDrawingTools } from "@/hooks/useDrawingTools";
+import type { DrawnElement } from "@/hooks/useDrawingTools";
 import { useElevationProfiles } from "@/hooks/useElevationProfiles";
 import { useGeometryBuffer } from "@/hooks/useGeometryBuffer";
 import { useGeometryOperations } from "@/hooks/useGeometryOperations";
@@ -232,6 +233,7 @@ export default function App() {
   const [terrainCamera, setTerrainCamera] = useState<Terrain3DCamera | null>(null);
   const terrainCameraRef = useRef<Terrain3DCamera | null>(terrainCamera);
   const terrainCameraReaderRef = useRef<(() => Terrain3DCamera) | null>(null);
+  const terrainElementLocatorRef = useRef<((element: DrawnElement) => void) | null>(null);
   const [terrain3DStyle, setTerrain3DStyle] = useState<OpenFreeMapId>(initialTerrain3DStyle);
   const [terrainExaggeration, setTerrainExaggeration] = useState(1);
   const [terrainNavigationRevision, setTerrainNavigationRevision] = useState(0);
@@ -491,6 +493,11 @@ export default function App() {
   const changeViewMode = (nextMode: ViewMode) => {
     if (nextMode === viewMode) return;
     if (nextMode === "3d") {
+      geometryBuffer.clearPreview();
+      if (geometryOperationsOpen) {
+        geometryOperations.clearPreview();
+        setGeometryOperationsOpen(false);
+      }
       if (!terrain3DStyleChosenRef.current) setTerrain3DStyle(selectedVectorBaseMap ?? "positron");
       const view = mapRef.current?.getView();
       const projectedCenter = view?.getCenter();
@@ -531,6 +538,17 @@ export default function App() {
   const handleTerrainCameraReaderChange = useCallback((reader: (() => Terrain3DCamera) | null) => {
     terrainCameraReaderRef.current = reader;
   }, []);
+
+  const handleTerrainElementLocatorChange = useCallback((reader: ((element: DrawnElement) => void) | null) => {
+    terrainElementLocatorRef.current = reader;
+  }, []);
+
+  const selectTerrainElement = useCallback((id: string) => {
+    drawingTools.selectElement(id);
+    setPanelTab("areas");
+    setAreaPanelView("detail");
+    setPanelOpen(true);
+  }, [drawingTools.selectElement]);
 
   const handleTerrainStyleChange = useCallback((style: OpenFreeMapId) => {
     terrain3DStyleChosenRef.current = true;
@@ -687,6 +705,11 @@ export default function App() {
 
   const focusElement = (id: string) => {
     drawingTools.selectElement(id);
+    if (viewMode === "3d") {
+      const element = drawingTools.elements.find((candidate) => candidate.id === id);
+      if (element) terrainElementLocatorRef.current?.(element);
+      return;
+    }
     drawingTools.centerElement(id);
   };
 
@@ -1063,6 +1086,7 @@ export default function App() {
             <DrawnElementsList
               elements={drawingTools.elements}
               selectedIds={drawingTools.selectedIds}
+              previewsAvailable={viewMode === "2d"}
               onFocus={openAreaDetails}
               onRename={drawingTools.renameElement}
               onDelete={drawingTools.deleteElement}
@@ -1083,6 +1107,7 @@ export default function App() {
           </> : <GeometryDetails
             element={selectedElement}
             analysis={terrainAnalysis.analyses[selectedElement.id]}
+            previewActionsAvailable={viewMode === "2d"}
             elevationProfile={elevationProfiles.profilesById[selectedElement.id]}
             bufferState={geometryBuffer.bufferState?.sourceId === selectedElement.id
               && geometryBuffer.bufferState.geometryRevision === selectedElement.geometryRevision
@@ -1217,6 +1242,10 @@ export default function App() {
                 navigationRevision={terrainNavigationRevision}
                 onCameraChange={handleTerrainCameraChange}
                 onCameraReaderChange={handleTerrainCameraReaderChange}
+                onLocateElementReaderChange={handleTerrainElementLocatorChange}
+                elements={drawingTools.elements}
+                selectedIds={drawingTools.selectedIds}
+                onSelectElement={selectTerrainElement}
                 onStyleChange={handleTerrainStyleChange}
                 onExaggerationChange={setTerrainExaggeration}
               />
