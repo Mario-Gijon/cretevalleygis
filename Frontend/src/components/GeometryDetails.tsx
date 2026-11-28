@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Activity, ArrowLeft, LoaderCircle, X } from "lucide-react";
+import { Activity, ArrowLeft, Box, LoaderCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { SelectedElementInfo } from "@/hooks/useDrawingTools";
 import type { ElevationProfileState } from "@/hooks/useElevationProfiles";
@@ -20,6 +20,7 @@ type GeometryDetailsProps = {
   onBackToList: () => void;
   onAnalyzeArea: () => void;
   onResumeAnalysis: () => void;
+  onViewTerrainModel: (trigger: HTMLButtonElement) => void;
   onRename: (id: string, name: string) => void;
   onGenerateProfile: () => void;
   onCancelProfile: () => void;
@@ -28,7 +29,7 @@ type GeometryDetailsProps = {
   onCancelBuffer: () => void;
 };
 
-export function GeometryDetails({ element, analysis, batchBusy = false, elevationProfile, bufferState, bufferGeometry, previewActionsAvailable = true, onBackToList, onAnalyzeArea, onResumeAnalysis, onRename, onGenerateProfile, onCancelProfile, onGenerateBuffer, onConfirmBuffer, onCancelBuffer }: GeometryDetailsProps) {
+export function GeometryDetails({ element, analysis, batchBusy = false, elevationProfile, bufferState, bufferGeometry, previewActionsAvailable = true, onBackToList, onAnalyzeArea, onResumeAnalysis, onViewTerrainModel, onRename, onGenerateProfile, onCancelProfile, onGenerateBuffer, onConfirmBuffer, onCancelBuffer }: GeometryDetailsProps) {
   const [name, setName] = useState(element?.name ?? "");
 
   useEffect(() => setName(element?.name ?? ""), [element?.id, element?.name]);
@@ -44,6 +45,12 @@ export function GeometryDetails({ element, analysis, batchBusy = false, elevatio
       : element.geometryType === "MultiPolygon"
         ? `Área compuesta · ${value.polygonCount} polígonos`
         : "Área";
+  const currentAnalysis = analysis?.geometryRevision === element.geometryRevision
+    && analysis.state === "completed"
+    && Boolean(analysis.analysisId && analysis.result?.analysis_id === analysis.analysisId);
+  const terrainModelHint = analysis?.geometryRevision === element.geometryRevision && ["submitting", "running", "tracking-error"].includes(analysis.state)
+    ? "Espera a que termine el análisis para abrir el modelo."
+    : "Analiza esta área primero para habilitar el terreno 3D.";
 
   return (
     <section className="geometry-details" aria-labelledby="geometry-details-title">
@@ -102,6 +109,19 @@ export function GeometryDetails({ element, analysis, batchBusy = false, elevatio
           onConfirm={onConfirmBuffer}
           onCancel={onCancelBuffer}
         />
+      )}
+      {value.kind === "Area" && element.geoJsonGeometry && (
+        <section className="geometry-terrain-3d-action" aria-label="Modelo de terreno tridimensional">
+          <Button
+            variant="outline"
+            size="small"
+            disabled={!currentAnalysis}
+            onClick={(event) => onViewTerrainModel(event.currentTarget)}
+          >
+            <Box size={15} aria-hidden="true" /> Ver terreno en 3D
+          </Button>
+          {!currentAnalysis && <p>{terrainModelHint}</p>}
+        </section>
       )}
       {previewActionsAvailable && value.kind === "LineString" && element.geoJsonLineString && (
         <section className="geometry-profile-action" aria-label="Perfil de elevación">

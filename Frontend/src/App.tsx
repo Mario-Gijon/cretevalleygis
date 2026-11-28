@@ -89,8 +89,10 @@ type PanelTab = "layers" | "areas";
 type AreaPanelView = "list" | "detail";
 type TerrainTheme = "elevation" | "slope" | "aspect";
 type ViewMode = "2d" | "3d";
+type IsolatedTerrainTarget = { areaId: string; geometryRevision: number; analysisId: string };
 
 const Terrain3DView = lazy(() => import("@/components/Terrain3DView"));
+const IsolatedTerrainView = lazy(() => import("@/components/IsolatedTerrainView"));
 
 function initialTheme(): ThemeMode {
   try {
@@ -230,6 +232,8 @@ export default function App() {
   });
   const [mapCenter, setMapCenter] = useState<[number, number]>([...CRETE_CENTER]);
   const [viewMode, setViewMode] = useState<ViewMode>("2d");
+  const [isolatedTerrainTarget, setIsolatedTerrainTarget] = useState<IsolatedTerrainTarget | null>(null);
+  const isolatedTerrainOpenerRef = useRef<HTMLButtonElement | null>(null);
   const [terrainCamera, setTerrainCamera] = useState<Terrain3DCamera | null>(null);
   const terrainCameraRef = useRef<Terrain3DCamera | null>(terrainCamera);
   const terrainCameraReaderRef = useRef<(() => Terrain3DCamera) | null>(null);
@@ -561,6 +565,24 @@ export default function App() {
   }, []);
 
   const selectedElement = drawingTools.selectedElementInfo;
+  const isolatedTerrainArea = isolatedTerrainTarget
+    ? drawingTools.elements.find((element) => element.id === isolatedTerrainTarget.areaId)
+    : undefined;
+  const isolatedTerrainAnalysis = isolatedTerrainTarget
+    ? terrainAnalysis.analyses[isolatedTerrainTarget.areaId]
+    : undefined;
+  const isolatedTerrainTargetIsCurrent = Boolean(
+    isolatedTerrainTarget
+      && isolatedTerrainArea
+      && isSurfaceGeometryType(isolatedTerrainArea.geometryType)
+      && isolatedTerrainArea.geometryInfo?.kind === "Area"
+      && isolatedTerrainArea.geometryRevision === isolatedTerrainTarget.geometryRevision
+      && isolatedTerrainArea.geoJsonGeometry
+      && isolatedTerrainAnalysis?.state === "completed"
+      && isolatedTerrainAnalysis.geometryRevision === isolatedTerrainTarget.geometryRevision
+      && isolatedTerrainAnalysis.analysisId === isolatedTerrainTarget.analysisId
+      && isolatedTerrainAnalysis.result?.analysis_id === isolatedTerrainTarget.analysisId,
+  );
   const areaElements = useMemo(
     () => drawingTools.elements.filter((element) => isSurfaceGeometryType(element.geometryType)),
     [drawingTools.elements],
@@ -584,6 +606,19 @@ export default function App() {
   useEffect(() => {
     terrainAnalysis.syncAreas(drawingTools.elements);
   }, [drawingTools.elements, terrainAnalysis.syncAreas]);
+
+  useEffect(() => {
+    if (isolatedTerrainTarget && !isolatedTerrainTargetIsCurrent) setIsolatedTerrainTarget(null);
+  }, [isolatedTerrainTarget, isolatedTerrainTargetIsCurrent]);
+
+  useEffect(() => {
+    if (isolatedTerrainTarget) return;
+    const opener = isolatedTerrainOpenerRef.current;
+    isolatedTerrainOpenerRef.current = null;
+    if (!opener?.isConnected) return;
+    const frame = requestAnimationFrame(() => opener.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [isolatedTerrainTarget]);
 
   useEffect(() => {
     const polygonIds = new Set(areaElements.map((element) => element.id));
@@ -738,10 +773,11 @@ export default function App() {
   }, [drawingTools.openTraceContextMenu]);
 
   const handleTraceClickCapture = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+    if (isolatedTerrainTarget) return;
     if (drawingTools.traceContextMenu && !(event.target instanceof HTMLElement && event.target.closest(".trace-context-menu"))) {
       drawingTools.continueTrace();
     }
-  }, [drawingTools.continueTrace, drawingTools.traceContextMenu]);
+  }, [drawingTools.continueTrace, drawingTools.traceContextMenu, isolatedTerrainTarget]);
 
   useEffect(() => {
     if (!drawingTools.traceContextMenu) return;
@@ -750,6 +786,7 @@ export default function App() {
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
+      if (isolatedTerrainTarget) return;
       if (viewMode === "3d") return;
       if (event.defaultPrevented || event.altKey) return;
 
@@ -792,6 +829,7 @@ export default function App() {
     drawingTools.finishTrace,
     drawingTools.undoLastVertex,
     drawingTools.selectedIds.length,
+    isolatedTerrainTarget,
     viewMode,
   ]);
 
@@ -1125,6 +1163,23 @@ export default function App() {
                 selectedElement.geoJsonGeometry,
               );
             }}
+            onViewTerrainModel={(trigger) => {
+              const analysis = terrainAnalysis.analyses[selectedElement.id];
+              if (
+                selectedElement.geometry.kind !== "Area"
+                || !selectedElement.geoJsonGeometry
+                || analysis?.state !== "completed"
+                || analysis.geometryRevision !== selectedElement.geometryRevision
+                || !analysis.analysisId
+                || analysis.result?.analysis_id !== analysis.analysisId
+              ) return;
+              isolatedTerrainOpenerRef.current = trigger;
+              setIsolatedTerrainTarget({
+                areaId: selectedElement.id,
+                geometryRevision: selectedElement.geometryRevision,
+                analysisId: analysis.analysisId,
+              });
+            }}
             onResumeAnalysis={() => { void terrainAnalysis.resumeAnalysis(selectedElement.id, selectedElement.name); }}
             onRename={drawingTools.renameElement}
             onGenerateProfile={() => {
@@ -1427,6 +1482,21 @@ export default function App() {
         }}
         onStopCalculation={terrainAnalysis.stopAnalysisBatch}
       />}
+      {isolatedTerrainTarget && isolatedTerrainTargetIsCurrent && isolatedTerrainArea?.geometryInfo?.kind === "Area" && isolatedTerrainArea.geoJsonGeometry && (
+        <Suspense fallback={(
+          <div className="isolated-terrain-backdrop" data-theme={theme} role="status">
+            <div className="isolated-terrain-state"><LoaderCircle size={18} className="spinner" aria-hidden="true" /> Abriendo el visor de terreno…</div>
+          </div>
+        )}>
+          <IsolatedTerrainView
+            areaName={isolatedTerrainArea.name}
+            areaAreaM2={isolatedTerrainArea.geometryInfo.area}
+            analysisId={isolatedTerrainTarget.analysisId}
+            theme={theme}
+            onClose={() => setIsolatedTerrainTarget(null)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
