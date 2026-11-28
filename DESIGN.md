@@ -14,6 +14,7 @@
 - El modo claro y oscuro conserva el mismo contraste. En pantallas pequeñas, el panel se superpone al mapa y reduce el espacio que ocupa.
 - Las herramientas forman una barra flotante compacta; los estados activos y las instrucciones tienen que ser claros sin cubrir la cartografía.
 - **Inspeccionar** se activa como herramienta independiente junto a la barra. Su ficha muestra una sola consulta temporal, permite copiar coordenadas y distingue carga, ausencia de datos y error; al salir limpia el marcador. Los valores son orientativos y no se mezclan con las áreas ni con los análisis zonales.
+- El perfil de elevación de una línea se presenta en un panel compacto sobre el borde inferior del mapa. La gráfica sincroniza la muestra señalada con un marcador temporal en el mapa; cerrar el panel conserva el resultado en memoria y editar la geometría lo invalida.
 - El buscador compacto vive en la cabecera. Ofrece sugerencias locales de Natural Earth o una opción inmediata para coordenadas decimales; flechas y Enter permiten elegir sin depender del ratón. Seleccionar una ubicación solo navega el mapa y usa un marcador temporal, sin cambiar capas, dibujos ni análisis.
 - La atribución cartográfica permanece junto al mapa. No se duplica en el panel.
 - La escala gráfica, las coordenadas y las mediciones permanecen compactas en los bordes del mapa, también en pantallas pequeñas.

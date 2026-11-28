@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { Activity, ArrowLeft, LoaderCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { SelectedElementInfo } from "@/hooks/useDrawingTools";
+import type { ElevationProfileState } from "@/hooks/useElevationProfiles";
 import { TerrainAnalysisPanel } from "@/components/TerrainAnalysisPanel";
 import type { AreaAnalysisState } from "@/lib/terrain-analysis";
 import { formatArea, formatCoordinate, formatDistance } from "@/lib/geometry-metrics";
@@ -10,13 +11,16 @@ type GeometryDetailsProps = {
   element: SelectedElementInfo;
   analysis?: AreaAnalysisState;
   batchBusy?: boolean;
+  elevationProfile?: ElevationProfileState;
   onBackToList: () => void;
   onAnalyzeArea: () => void;
   onResumeAnalysis: () => void;
   onRename: (id: string, name: string) => void;
+  onGenerateProfile: () => void;
+  onCancelProfile: () => void;
 };
 
-export function GeometryDetails({ element, analysis, batchBusy = false, onBackToList, onAnalyzeArea, onResumeAnalysis, onRename }: GeometryDetailsProps) {
+export function GeometryDetails({ element, analysis, batchBusy = false, elevationProfile, onBackToList, onAnalyzeArea, onResumeAnalysis, onRename, onGenerateProfile, onCancelProfile }: GeometryDetailsProps) {
   const [name, setName] = useState(element?.name ?? "");
 
   useEffect(() => setName(element?.name ?? ""), [element?.id, element?.name]);
@@ -71,6 +75,31 @@ export function GeometryDetails({ element, analysis, batchBusy = false, onBackTo
           </>
         )}
       </dl>
+      {value.kind === "LineString" && element.geoJsonLineString && (
+        <section className="geometry-profile-action" aria-label="Perfil de elevación">
+          <Button
+            variant="outline"
+            size="small"
+            onClick={onGenerateProfile}
+            disabled={elevationProfile?.status === "loading"}
+          >
+            {elevationProfile?.status === "loading"
+              ? <LoaderCircle size={14} className="spinner" aria-hidden="true" />
+              : <Activity size={14} aria-hidden="true" />}
+            {elevationProfile?.result
+              ? elevationProfile.status === "partial" ? "Ver perfil parcial" : "Ver perfil de elevación"
+              : elevationProfile?.status === "loading" ? "Generando perfil…" : "Generar perfil de elevación"}
+          </Button>
+          {elevationProfile?.status === "loading" && (
+            <Button variant="ghost" size="small" onClick={onCancelProfile} aria-label="Detener consulta del perfil">
+              <X size={14} aria-hidden="true" /> Detener
+            </Button>
+          )}
+          {elevationProfile?.status === "error" && <p className="geometry-profile-message geometry-profile-message--error" role="alert">{elevationProfile.message}</p>}
+          {elevationProfile?.status === "cancelled" && <p className="geometry-profile-message">{elevationProfile.message}</p>}
+          {elevationProfile?.status === "partial" && !elevationProfile.result && <p className="geometry-profile-message">{elevationProfile.message}</p>}
+        </section>
+      )}
       {value.kind === "Polygon" && element.geoJsonGeometry && (
         <TerrainAnalysisPanel
           analysis={analysis?.geometryRevision === element.geometryRevision ? analysis : analysis ? {

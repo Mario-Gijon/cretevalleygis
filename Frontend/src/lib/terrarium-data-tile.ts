@@ -30,10 +30,24 @@ type TerrainTileRaster = {
   stats: TerrariumTileStats;
 };
 
+class TileRequestBudgetExceeded extends Error {}
+
+export type TerrariumElevationSampleOptions = {
+  signal?: AbortSignal;
+  maximumZoom?: number;
+  minimumZoom?: number;
+  allowTileRequest?: (key: string) => boolean;
+};
+
+export type TerrariumElevationSample =
+  | { status: "available"; elevationMeters: number; sourceZoom: number; pixelGroundDistanceMeters: number }
+  | { status: "no-data" | "unavailable" | "outside-coverage" | "request-limit" };
+
 export type TerrariumDataTileSource = {
   source: DataTileSource;
   getTileStats: (zoom: number, x: number, y: number) => TerrariumTileStats | undefined;
   samplePoint: (longitude: number, latitude: number, signal?: AbortSignal) => Promise<TerrariumPointNeighborhood>;
+  sampleElevation: (longitude: number, latitude: number, options?: TerrariumElevationSampleOptions) => Promise<TerrariumElevationSample>;
 };
 
 export type TerrariumPointNeighborhood =
@@ -154,7 +168,12 @@ export function createTerrariumDataTileSource(): TerrariumDataTileSource {
   const statsByTile = new Map<string, TerrariumTileStats>();
   const baseRasterTiles = new Map<string, Promise<TerrainTileRaster>>();
 
-  const loadDecodedTile = (zoom: number, x: number, y: number): Promise<DecodedTerrariumTile | null> => {
+  const loadDecodedTile = (
+    zoom: number,
+    x: number,
+    y: number,
+    allowTileRequest?: (key: string) => boolean,
+  ): Promise<DecodedTerrariumTile | null> => {
     const key = tileKey(zoom, x, y);
     const cached = decodedTiles.get(key);
     if (cached) {
@@ -165,6 +184,7 @@ export function createTerrariumDataTileSource(): TerrariumDataTileSource {
     const failedUntil = failedTileExpirations.get(key);
     if (failedUntil && failedUntil > Date.now()) return Promise.resolve(null);
     if (failedUntil) failedTileExpirations.delete(key);
+    if (allowTileRequest && !allowTileRequest(key)) throw new TileRequestBudgetExceeded();
 
     const request = decodeTerrariumTile(zoom, x, y).then((tile) => {
       if (!tile) {
@@ -286,6 +306,7 @@ export function createTerrariumDataTileSource(): TerrariumDataTileSource {
     worldPixelX: number,
     worldPixelY: number,
     signal?: AbortSignal,
+    allowTileRequest?: (key: string) => boolean,
   ): Promise<{ elevation: number | null; loadedTile: boolean }> => {
     const sampleX = worldPixelX - 0.5;
     const sampleY = worldPixelY - 0.5;
@@ -308,7 +329,7 @@ export function createTerrariumDataTileSource(): TerrariumDataTileSource {
       const tileX = Math.floor(pixelX / TILE_SIZE);
       const tileY = Math.floor(pixelY / TILE_SIZE);
       if (tileY < 0 || tileY >= 2 ** zoom) continue;
-      const tile = await loadDecodedTile(zoom, tileX, tileY);
+      const tile = await loadDecodedTile(zoom, tileX, tileY, allowTileRequest);
       if (signal?.aborted) throw signal.reason;
       if (!tile) continue;
       loadedTile = true;
@@ -376,6 +397,57 @@ export function createTerrariumDataTileSource(): TerrariumDataTileSource {
     return { status: loadedAnyTile ? "no-data" : "unavailable" };
   };
 
+  const sampleElevation: TerrariumDataTileSource["sampleElevation"] = async (longitude, latitude, options = {}) => {
+    if (!Number.isFinite(longitude) || !Number.isFinite(latitude)
+      || longitude < -180 || longitude > 180
+      || Math.abs(latitude) > WEB_MERCATOR_MAX_LATITUDE) {
+      return { status: "outside-coverage" };
+    }
+
+    const firstZoom = Math.max(
+      EXPLORATION_TERRAIN.mapMinimumZoom,
+      Math.min(EXPLORATION_TERRAIN.maxDataZoom, Math.floor(options.maximumZoom ?? EXPLORATION_TERRAIN.maxDataZoom)),
+    );
+    const lastZoom = Math.max(
+      EXPLORATION_TERRAIN.mapMinimumZoom,
+      Math.min(firstZoom, Math.floor(options.minimumZoom ?? firstZoom - MAX_PARENT_FALLBACK_LEVELS)),
+    );
+    const latitudeRadians = (latitude * Math.PI) / 180;
+    let loadedAnyTile = false;
+
+    try {
+      for (let zoom = firstZoom; zoom >= lastZoom; zoom -= 1) {
+        if (options.signal?.aborted) throw options.signal.reason;
+        const tileCount = 2 ** zoom;
+        const worldPixelX = ((longitude + 180) / 360) * tileCount * TILE_SIZE;
+        const worldPixelY = ((1 - Math.asinh(Math.tan(latitudeRadians)) / Math.PI) / 2) * tileCount * TILE_SIZE;
+        const center = await sampleWorldPixel(
+          zoom,
+          worldPixelX,
+          worldPixelY,
+          options.signal,
+          options.allowTileRequest,
+        );
+        loadedAnyTile ||= center.loadedTile;
+        if (center.elevation === null) continue;
+
+        const pixelGroundDistanceMeters = (EARTH_CIRCUMFERENCE_METERS / (tileCount * TILE_SIZE)) * Math.cos(latitudeRadians);
+        return {
+          status: "available",
+          elevationMeters: center.elevation,
+          sourceZoom: zoom,
+          pixelGroundDistanceMeters,
+        };
+      }
+    } catch (error) {
+      if (options.signal?.aborted) throw options.signal.reason;
+      if (error instanceof TileRequestBudgetExceeded) return { status: "request-limit" };
+      throw error;
+    }
+
+    return { status: loadedAnyTile ? "no-data" : "unavailable" };
+  };
+
   const loader = async (zoom: number, x: number, y: number, options: LoaderOptions) => {
     const sourceX = wrappedTileX(x, zoom);
     const centerTile = await loadBaseRasterTile(zoom, sourceX, y, options.signal);
@@ -436,6 +508,7 @@ export function createTerrariumDataTileSource(): TerrariumDataTileSource {
     source,
     getTileStats: (zoom, x, y) => statsByTile.get(tileKey(zoom, x, y)),
     samplePoint,
+    sampleElevation,
   };
 }
 

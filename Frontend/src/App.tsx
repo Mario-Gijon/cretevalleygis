@@ -36,6 +36,7 @@ import {
 } from "@/lib/base-maps";
 import { DrawnElementsList } from "@/components/DrawnElementsList";
 import { GeometryDetails } from "@/components/GeometryDetails";
+import { ElevationProfilePanel } from "@/components/ElevationProfilePanel";
 import { ObjectiveAreaComparison } from "@/components/ObjectiveAreaComparison";
 import { DrawingToolbar } from "@/components/DrawingToolbar";
 import { PointInspectorControl } from "@/components/PointInspectorControl";
@@ -43,6 +44,7 @@ import { PlaceSearchControl } from "@/components/PlaceSearchControl";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useDrawingTools } from "@/hooks/useDrawingTools";
+import { useElevationProfiles } from "@/hooks/useElevationProfiles";
 import { usePointInspector } from "@/hooks/usePointInspector";
 import { usePlaceSearchMarker } from "@/hooks/usePlaceSearchMarker";
 import { useTerrainAnalysis } from "@/hooks/useTerrainAnalysis";
@@ -149,6 +151,7 @@ export default function App() {
   const mapRef = useRef<OlMap | null>(null);
   const baseLayersRef = useRef<BaseMapLayers | null>(null);
   const drawingTools = useDrawingTools();
+  const elevationProfiles = useElevationProfiles();
   const pointInspector = usePointInspector();
   const placeSearchMarker = usePlaceSearchMarker();
   const terrainAnalysis = useTerrainAnalysis();
@@ -197,6 +200,14 @@ export default function App() {
   const [mapCenter, setMapCenter] = useState<[number, number]>([...CRETE_CENTER]);
 
   baseMapRef.current = baseMap;
+
+  useEffect(() => {
+    elevationProfiles.syncElements(drawingTools.elements.map(({ id, geometryType, geometryRevision }) => ({
+      id,
+      geometryType,
+      geometryRevision,
+    })));
+  }, [drawingTools.elements, elevationProfiles.syncElements]);
 
   const handleMapStatus = useCallback((status: MapStatus) => {
     setMapStatus(status);
@@ -826,6 +837,7 @@ export default function App() {
           /> : <GeometryDetails
             element={selectedElement}
             analysis={terrainAnalysis.analyses[selectedElement.id]}
+            elevationProfile={elevationProfiles.profilesById[selectedElement.id]}
             batchBusy={terrainAnalysis.batchState?.phase === "running" || terrainAnalysis.batchState?.phase === "stopping"}
             onBackToList={() => setAreaPanelView("list")}
             onAnalyzeArea={() => {
@@ -839,6 +851,15 @@ export default function App() {
             }}
             onResumeAnalysis={() => { void terrainAnalysis.resumeAnalysis(selectedElement.id, selectedElement.name); }}
             onRename={drawingTools.renameElement}
+            onGenerateProfile={() => {
+              if (selectedElement.geometry.kind !== "LineString" || !selectedElement.geoJsonLineString) return;
+              void elevationProfiles.openOrGenerate(
+                selectedElement.id,
+                selectedElement.geometryRevision,
+                selectedElement.geoJsonLineString.coordinates.map((coordinate: number[]): [number, number] => [coordinate[0], coordinate[1]]),
+              );
+            }}
+            onCancelProfile={() => elevationProfiles.cancelProfile(selectedElement.id)}
           />)}
           </div>
 
@@ -884,6 +905,7 @@ export default function App() {
             measurementsLayer={drawingTools.measurementLayer}
             pointInspectorLayer={pointInspector.layer}
             placeSearchMarkerLayer={placeSearchMarker.layer}
+            elevationProfileMarkerLayer={elevationProfiles.markerLayer}
             explorationTerrainEnabled={explorationTerrainEnabled}
             explorationTerrainOpacity={explorationTerrainOpacity}
             explorationTerrainTheme={explorationTerrainTheme}
@@ -1033,6 +1055,15 @@ export default function App() {
             <div className="map-status map-status--error qgis-unavailable-notice" role="status">
               La cartografía QGIS no está disponible. OpenStreetMap sigue activo.
             </div>
+          )}
+          {elevationProfiles.panelOpen && elevationProfiles.activeProfileId && (
+            <ElevationProfilePanel
+              name={drawingTools.elements.find((element) => element.id === elevationProfiles.activeProfileId)?.name ?? "Perfil de elevación"}
+              profile={elevationProfiles.profilesById[elevationProfiles.activeProfileId]}
+              onClose={elevationProfiles.closePanel}
+              onCancel={elevationProfiles.cancelActiveProfile}
+              onSampleHover={elevationProfiles.showSampleOnMap}
+            />
           )}
         </section>
       </main>

@@ -22,7 +22,7 @@ import CircleStyle from "ol/style/Circle.js";
 import Fill from "ol/style/Fill.js";
 import Stroke from "ol/style/Stroke.js";
 import Style from "ol/style/Style.js";
-import GeoJSON, { type GeoJSONPolygon } from "ol/format/GeoJSON.js";
+import GeoJSON, { type GeoJSONLineString, type GeoJSONPolygon } from "ol/format/GeoJSON.js";
 import { getGeometryInfo, getMeasurementResult, type GeometryInfo, type MeasurementResult } from "@/lib/geometry-metrics";
 
 export type DrawingTool = "navigate" | "point" | "line" | "polygon" | "select" | "modify";
@@ -37,6 +37,7 @@ export type DrawnElement = {
   geometryRevision: number;
   geometryInfo?: GeometryInfo;
   geoJsonGeometry?: GeoJSONPolygon;
+  geoJsonLineString?: GeoJSONLineString;
   bboxWgs84?: [number, number, number, number];
 };
 
@@ -46,6 +47,7 @@ export type SelectedElementInfo = {
   geometry: GeometryInfo;
   geometryRevision: number;
   geoJsonGeometry?: GeoJSONPolygon;
+  geoJsonLineString?: GeoJSONLineString;
   bboxWgs84?: [number, number, number, number];
 } | null;
 
@@ -72,13 +74,18 @@ const geometryNames: Record<DrawingGeometry, string> = {
 
 const geoJsonFormat = new GeoJSON();
 
-function polygonAsWgs84GeoJson(geometry: Geometry | undefined, projection: ProjectionLike): GeoJSONPolygon | undefined {
-  if (!(geometry instanceof Polygon)) return undefined;
+function geometryAsWgs84GeoJson(
+  geometry: Geometry | undefined,
+  projection: ProjectionLike,
+): { geoJsonGeometry?: GeoJSONPolygon; geoJsonLineString?: GeoJSONLineString } {
+  if (!(geometry instanceof Polygon) && !(geometry instanceof LineString)) return {};
   const geoJson = geoJsonFormat.writeGeometryObject(geometry, {
     featureProjection: projection,
     dataProjection: "EPSG:4326",
   });
-  return geoJson.type === "Polygon" ? geoJson : undefined;
+  if (geoJson.type === "Polygon") return { geoJsonGeometry: geoJson };
+  if (geoJson.type === "LineString" && geoJson.coordinates.length >= 2) return { geoJsonLineString: geoJson };
+  return {};
 }
 
 const featureStyle = new Style({
@@ -207,7 +214,7 @@ export function useDrawingTools() {
         const id = feature.getId();
         const projection = mapRef.current?.getView().getProjection();
         const geometryInfo = geometry && projection ? getGeometryInfo(geometry, projection) : null;
-        const geoJsonGeometry = geometry && projection ? polygonAsWgs84GeoJson(geometry, projection) : undefined;
+        const geoJson = geometryAsWgs84GeoJson(geometry, projection ?? "EPSG:3857");
         const geometryRevision = geometry?.getRevision() ?? 0;
         const bboxWgs84 = geometry instanceof Polygon && projection
           ? transformExtent(geometry.getExtent(), projection, "EPSG:4326", 8) as [number, number, number, number]
@@ -218,7 +225,7 @@ export function useDrawingTools() {
           geometryType: geometryType ?? "Point",
           geometryRevision,
           ...(geometryInfo ? { geometryInfo } : {}),
-          ...(geoJsonGeometry ? { geoJsonGeometry } : {}),
+          ...geoJson,
           ...(bboxWgs84 ? { bboxWgs84 } : {}),
         };
       }),
@@ -237,7 +244,7 @@ export function useDrawingTools() {
     const geometry = feature.getGeometry();
     const projection = mapRef.current?.getView().getProjection();
     const geometryInfo = geometry && projection ? getGeometryInfo(geometry, projection) : null;
-    const geoJsonGeometry = geometry && projection ? polygonAsWgs84GeoJson(geometry, projection) : undefined;
+    const geoJson = geometryAsWgs84GeoJson(geometry, projection ?? "EPSG:3857");
     const geometryRevision = geometry?.getRevision() ?? 0;
     const bboxWgs84 = geometry instanceof Polygon && projection
       ? transformExtent(geometry.getExtent(), projection, "EPSG:4326", 8) as [number, number, number, number]
@@ -249,7 +256,7 @@ export function useDrawingTools() {
             name: String(feature.get("name") ?? "Elemento"),
             geometry: geometryInfo,
             geometryRevision,
-            ...(geoJsonGeometry ? { geoJsonGeometry } : {}),
+            ...geoJson,
             ...(bboxWgs84 ? { bboxWgs84 } : {}),
           }
         : null,

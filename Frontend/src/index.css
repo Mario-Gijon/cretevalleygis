@@ -670,6 +670,35 @@ button {
   text-align: right;
 }
 
+.geometry-profile-action {
+  display: grid;
+  justify-items: start;
+  gap: 5px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.geometry-profile-action .ui-button--outline,
+.geometry-profile-action .ui-button--ghost {
+  min-height: 32px;
+  font-size: 10px;
+}
+
+.geometry-profile-message {
+  margin: 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.geometry-profile-message--error {
+  color: #a7372e;
+}
+
+.app-shell[data-theme="dark"] .geometry-profile-message--error {
+  color: #ffaaa3;
+}
+
 .geometry-metrics-note {
   margin: 0;
   color: var(--muted);
