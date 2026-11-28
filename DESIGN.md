@@ -13,6 +13,7 @@
 - Inter, iconografía Lucide y superficies neutras con bordes discretos mantienen la identidad definida en los tokens CSS. El lima se reserva para acentos puntuales.
 - El modo claro y oscuro conserva el mismo contraste. En pantallas pequeñas, el panel se superpone al mapa y reduce el espacio que ocupa.
 - Las herramientas forman una barra flotante compacta; los estados activos y las instrucciones tienen que ser claros sin cubrir la cartografía.
+- **Inspeccionar** se activa como herramienta independiente junto a la barra. Su ficha muestra una sola consulta temporal, permite copiar coordenadas y distingue carga, ausencia de datos y error; al salir limpia el marcador. Los valores son orientativos y no se mezclan con las áreas ni con los análisis zonales.
 - La atribución cartográfica permanece junto al mapa. No se duplica en el panel.
 - La escala gráfica, las coordenadas y las mediciones permanecen compactas en los bordes del mapa, también en pantallas pequeñas.
 - Las teselas de relieve sirven solo como contexto visual. Los datos preparados por área se conservan para análisis posteriores y no se activan al dibujar o seleccionar geometrías.

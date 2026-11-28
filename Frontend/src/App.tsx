@@ -38,9 +38,11 @@ import { DrawnElementsList } from "@/components/DrawnElementsList";
 import { GeometryDetails } from "@/components/GeometryDetails";
 import { ObjectiveAreaComparison } from "@/components/ObjectiveAreaComparison";
 import { DrawingToolbar } from "@/components/DrawingToolbar";
+import { PointInspectorControl } from "@/components/PointInspectorControl";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useDrawingTools } from "@/hooks/useDrawingTools";
+import { usePointInspector } from "@/hooks/usePointInspector";
 import { useTerrainAnalysis } from "@/hooks/useTerrainAnalysis";
 import { OBJECTIVE_CRITERIA } from "@/lib/objective-criteria";
 import { CRETE_CENTER } from "@/lib/map-config";
@@ -144,6 +146,7 @@ export default function App() {
   const mapRef = useRef<OlMap | null>(null);
   const baseLayersRef = useRef<BaseMapLayers | null>(null);
   const drawingTools = useDrawingTools();
+  const pointInspector = usePointInspector();
   const terrainAnalysis = useTerrainAnalysis();
   const [theme, setTheme] = useState<ThemeMode>(initialTheme);
   const [panelOpen, setPanelOpen] = useState(
@@ -204,6 +207,25 @@ export default function App() {
     setMapCenter(center);
     setMapZoom(zoom);
   }, []);
+
+  const handleMapReady = useCallback((map: OlMap) => {
+    const detachDrawingTools = drawingTools.connectMap(map);
+    const detachPointInspector = pointInspector.connectMap(map);
+    return () => {
+      detachPointInspector();
+      detachDrawingTools();
+    };
+  }, [drawingTools.connectMap, pointInspector.connectMap]);
+
+  const handleDrawingToolChange = useCallback((tool: Parameters<typeof drawingTools.setActiveTool>[0]) => {
+    if (pointInspector.active) pointInspector.setEnabled(false);
+    drawingTools.setActiveTool(tool);
+  }, [drawingTools.setActiveTool, pointInspector.active, pointInspector.setEnabled]);
+
+  const togglePointInspector = useCallback(() => {
+    if (!pointInspector.active) drawingTools.setActiveTool("navigate");
+    pointInspector.setEnabled(!pointInspector.active);
+  }, [drawingTools.setActiveTool, pointInspector.active, pointInspector.setEnabled]);
 
   const handleQgisStatusChange = useCallback((status: QgisStatus) => {
     setQgisStatus(status);
@@ -818,6 +840,7 @@ export default function App() {
             baseLayersRef={baseLayersRef}
             drawingsLayer={drawingTools.layer}
             measurementsLayer={drawingTools.measurementLayer}
+            pointInspectorLayer={pointInspector.layer}
             explorationTerrainEnabled={explorationTerrainEnabled}
             explorationTerrainOpacity={explorationTerrainOpacity}
             explorationTerrainTheme={explorationTerrainTheme}
@@ -831,24 +854,31 @@ export default function App() {
             onOverlayAvailabilityChange={handleOverlayAvailabilityChange}
             onExplorationTerrainStatusChange={handleExplorationTerrainStatusChange}
             onExplorationElevationScaleChange={handleExplorationElevationScaleChange}
-            onMapReady={drawingTools.connectMap}
+            onMapReady={handleMapReady}
             onCenterChange={handleMapCenterChange}
           />
 
-          <DrawingToolbar
-            activeTool={drawingTools.activeTool}
-            selectedCount={drawingTools.selectedIds.length}
-            drawingInProgress={drawingTools.drawingInProgress}
-            measurementResult={drawingTools.measurementResult}
-            onToolChange={drawingTools.setActiveTool}
-            onCancel={drawingTools.cancelDrawing}
-            onClearMeasurements={drawingTools.clearMeasurements}
-            onFinishTrace={drawingTools.finishTrace}
-            canFinishTrace={drawingTools.canFinishTrace}
-            canUndoVertex={drawingTools.canUndoVertex}
-            onUndoVertex={drawingTools.undoLastVertex}
-            onDelete={drawingTools.deleteSelected}
-          />
+          <div className="map-tools-cluster">
+            <DrawingToolbar
+              activeTool={drawingTools.activeTool}
+              selectedCount={drawingTools.selectedIds.length}
+              drawingInProgress={drawingTools.drawingInProgress}
+              measurementResult={drawingTools.measurementResult}
+              onToolChange={handleDrawingToolChange}
+              onCancel={drawingTools.cancelDrawing}
+              onClearMeasurements={drawingTools.clearMeasurements}
+              onFinishTrace={drawingTools.finishTrace}
+              canFinishTrace={drawingTools.canFinishTrace}
+              canUndoVertex={drawingTools.canUndoVertex}
+              onUndoVertex={drawingTools.undoLastVertex}
+              onDelete={drawingTools.deleteSelected}
+            />
+            <PointInspectorControl
+              active={pointInspector.active}
+              inspection={pointInspector.inspection}
+              onToggle={togglePointInspector}
+            />
+          </div>
 
           {drawingTools.traceContextMenu && (
             <div

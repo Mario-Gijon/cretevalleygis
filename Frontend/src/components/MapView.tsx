@@ -53,7 +53,7 @@ import {
   type ExplorationTerrainTheme,
   type ExplorationTerrainStatus,
 } from "@/lib/exploration-terrain";
-import { createTerrariumDataTileSource, TERRARIUM_DATA_GUTTER } from "@/lib/terrarium-data-tile";
+import { getSharedTerrariumDataTileSource, TERRARIUM_DATA_GUTTER } from "@/lib/terrarium-data-tile";
 
 export type MapStatus = {
   ready: boolean;
@@ -286,6 +286,7 @@ type MapViewProps = {
   baseLayersRef: MutableRef<BaseMapLayers | null>;
   drawingsLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
   measurementsLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
+  pointInspectorLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
   explorationTerrainEnabled: boolean;
   explorationTerrainOpacity: number;
   explorationTerrainTheme: ExplorationTerrainTheme;
@@ -314,6 +315,7 @@ export default function MapView({
   baseLayersRef,
   drawingsLayer,
   measurementsLayer,
+  pointInspectorLayer,
   explorationTerrainEnabled,
   explorationTerrainOpacity,
   explorationTerrainTheme,
@@ -421,7 +423,7 @@ export default function MapView({
       ]),
     ) as OverlayLayers;
     const webglAvailable = supportsWebGL();
-    const terrainDataSource = webglAvailable ? createTerrariumDataTileSource() : null;
+    const terrainDataSource = webglAvailable ? getSharedTerrariumDataTileSource() : null;
     const explorationSource: DataTileSource | null = terrainDataSource?.source ?? null;
     explorationSource?.setAttributions(
       '<a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noreferrer">Mapzen Terrain Tiles · fuentes y atribución</a>',
@@ -454,6 +456,7 @@ export default function MapView({
         overlayLayers.lakes,
         drawingsLayer,
         measurementsLayer,
+        pointInspectorLayer,
       ],
       controls: defaultControls({
         attribution: false,
@@ -867,7 +870,7 @@ export default function MapView({
       updateExplorationRef.current = null;
       scheduleElevationScaleRef.current = null;
     };
-  }, [baseLayersRef, drawingsLayer, mapRef, measurementsLayer, onCenterChange, onMapReady, onOverlayAvailabilityChange, onQgisStatusChange, onStatusChange]);
+  }, [baseLayersRef, drawingsLayer, mapRef, measurementsLayer, pointInspectorLayer, onCenterChange, onMapReady, onOverlayAvailabilityChange, onQgisStatusChange, onStatusChange]);
 
   useEffect(() => {
     const view = mapRef.current?.getView();

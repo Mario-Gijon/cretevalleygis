@@ -112,6 +112,10 @@ curl -o /tmp/world-hillshade.png 'http://localhost:8085/ogc/world?SERVICE=WMS&VE
 
 Natural Earth publica los datos en dominio público; la atribución es opcional y la interfaz incluye “Made with Natural Earth”. OpenStreetMap se mantiene como mapa base alternativo y requiere atribución visible. Las descargas iniciales de vectores y elevación requieren Internet. Esta configuración es para desarrollo local, no para producción.
 
+## Inspector de puntos
+
+La herramienta **Inspeccionar** consulta elevación al pulsar el mapa y mantiene un único marcador temporal, independiente del mapa base. Reutiliza la fuente, decodificación numérica, máscara de validez y caché Terrarium del relieve; empieza por z15 sin depender del zoom visible y busca hasta tres niveles padre (como mínimo z12) cuando falten muestras. La elevación se interpola solo con píxeles válidos. Pendiente y azimut de descenso usan diferencias centrales entre vecinos y el espaciado terrestre del píxel, corregido por latitud. Si no hay vecinos válidos, se muestra la elevación sin inventar derivadas; los píxeles NoData, los errores del servicio y las coordenadas fuera de Web Mercator se distinguen. El espaciado mostrado es nominal para la tesela consultada y no garantiza la resolución nativa de sus fuentes. El resultado es exploratorio: no crea geometrías permanentes ni trabajos zonales y no sustituye el análisis Copernicus de áreas.
+
 ## Licencias
 
 QWC2 conserva su licencia BSD-2-Clause y atribuciones originales en [`upstream/qwc2/LICENSE`](upstream/qwc2/LICENSE). QGIS Server conserva los avisos de licencia de su imagen oficial. Consulta [TERCEROS.md](TERCEROS.md) para las licencias y fuentes de software y datos.

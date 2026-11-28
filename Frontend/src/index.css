@@ -2968,22 +2968,192 @@ button {
   gap: 6px;
 }
 
-.drawing-toolbar {
+.map-tools-cluster {
   position: absolute;
   z-index: 3;
   top: 13px;
   left: 50%;
   display: flex;
   max-width: calc(100% - 24px);
+  align-items: flex-start;
+  gap: 5px;
+  transform: translateX(-50%);
+}
+
+.drawing-toolbar {
+  position: relative;
+  z-index: auto;
+  top: auto;
+  left: auto;
+  display: flex;
+  max-width: calc(100% - 24px);
   align-items: center;
   gap: 5px;
   padding: 4px;
-  transform: translateX(-50%);
+  transform: none;
   border: 1px solid var(--border);
   border-radius: 13px;
   background: color-mix(in srgb, var(--surface-raised) 94%, transparent);
   box-shadow: 0 3px 12px rgb(5 41 76 / 12%);
   backdrop-filter: blur(12px);
+}
+
+.point-inspector-control {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.point-inspector-toggle {
+  min-height: 46px;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-raised) 94%, transparent);
+  box-shadow: 0 3px 12px rgb(5 41 76 / 12%);
+  backdrop-filter: blur(12px);
+  font-size: 11px;
+}
+
+.point-inspector-card {
+  position: absolute;
+  z-index: 9;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  width: min(330px, calc(100vw - 28px));
+  max-height: min(72vh, 520px);
+  gap: 10px;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--surface-raised) 97%, transparent);
+  color: var(--text);
+  box-shadow: 0 8px 26px rgb(5 41 76 / 19%);
+  backdrop-filter: blur(14px);
+}
+
+.point-inspector-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--border);
+}
+
+.point-inspector-card__header .eyebrow {
+  margin: 0 0 3px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+}
+
+.point-inspector-card__header h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.point-inspector-prompt,
+.point-inspector-message,
+.point-inspector-note,
+.point-inspector-copy-error {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.point-inspector-message {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.point-inspector-message--warning {
+  color: #95601b;
+}
+
+.app-shell[data-theme="dark"] .point-inspector-message--warning {
+  color: #f1ca8e;
+}
+
+.point-inspector-message--error,
+.point-inspector-copy-error {
+  color: #a7372e;
+}
+
+.app-shell[data-theme="dark"] .point-inspector-message--error,
+.app-shell[data-theme="dark"] .point-inspector-copy-error {
+  color: #ffaaa3;
+}
+
+.point-inspector-coordinates,
+.point-inspector-values {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+  margin: 0;
+}
+
+.point-inspector-coordinates > div,
+.point-inspector-values > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.point-inspector-coordinates dt,
+.point-inspector-values dt {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.point-inspector-coordinates dd,
+.point-inspector-values dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 620;
+}
+
+.point-inspector-copy {
+  width: fit-content;
+  min-height: 29px;
+  gap: 6px;
+  font-size: 9px;
+}
+
+.point-inspector-source {
+  display: grid;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.point-inspector-source span {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.point-inspector-source strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.point-inspector-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  font-size: 9px;
 }
 
 .drawing-tool-buttons {
@@ -3327,7 +3497,7 @@ button {
     left: 12px;
   }
 
-  .drawing-toolbar {
+  .map-tools-cluster {
     top: 55px;
     right: 12px;
     left: 12px;
@@ -3335,8 +3505,36 @@ button {
     flex-wrap: wrap;
     justify-content: center;
     gap: 5px 8px;
+    transform: none;
+  }
+
+  .drawing-toolbar {
+    width: 100%;
+    flex: 1 0 100%;
+    max-width: none;
+    position: relative;
+    top: auto;
+    right: auto;
+    left: auto;
     padding: 6px;
     transform: none;
+  }
+
+  .point-inspector-control { flex: 1 0 100%; }
+
+  .point-inspector-toggle {
+    width: 100%;
+    min-height: 36px;
+    justify-content: center;
+    border-radius: 9px;
+    font-size: 10px;
+  }
+
+  .point-inspector-card {
+    right: 0;
+    left: 0;
+    width: auto;
+    max-height: min(55vh, 460px);
   }
 
   .drawing-tool-buttons {
