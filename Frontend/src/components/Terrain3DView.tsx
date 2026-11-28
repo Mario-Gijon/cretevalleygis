@@ -397,7 +397,7 @@ export default function Terrain3DView({
       });
     };
     const handleGeometryClick = (event: MapMouseEvent) => {
-      if (!map.isStyleLoaded() || GEOMETRY_LAYER_IDS.some((id) => !map.getLayer(id))) return;
+      if (GEOMETRY_LAYER_IDS.some((id) => !map.getLayer(id))) return;
       const hits = map.queryRenderedFeatures(event.point, { layers: GEOMETRY_LAYER_IDS });
       const hitIds = new Set(hits.map((feature) => String(feature.properties?.elementId ?? feature.id ?? "")));
       if (hitIds.size === 0) return;
@@ -456,7 +456,7 @@ export default function Terrain3DView({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map?.isStyleLoaded()) return;
+    if (!map) return;
     const source = map.getSource(GEOMETRIES_SOURCE_ID) as GeoJSONSource | undefined;
     if (!source) return;
     source.setData(geometryCollectionRef.current);
@@ -464,11 +464,13 @@ export default function Terrain3DView({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
-    if (!map.getSource(TERRAIN_SOURCE_ID)) return;
+    if (!map?.getSource(TERRAIN_SOURCE_ID)) return;
     try {
       map.setTerrain({ source: TERRAIN_SOURCE_ID, exaggeration });
     } catch (error) {
+      // A style swap can remove the source between the existence check and setTerrain.
+      // style.load reapplies the latest exaggeration from exaggerationRef in that case.
+      if (error instanceof Error && error.message === "Style is not done loading.") return;
       const message = error instanceof Error ? error.message : "No se pudo ajustar la exageración vertical.";
       setLoadError(message);
     }
