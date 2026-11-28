@@ -4,7 +4,13 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { AlertCircle, Compass, LoaderCircle, Mountain, RefreshCw, RotateCcw, X } from "lucide-react";
 import { formatArea } from "@/lib/geometry-metrics";
-import { buildTerrainMesh, projectGeometryToTexture, type TerrainMeshData } from "@/lib/terrain-model-mesh";
+import {
+  buildTerrainMesh,
+  buildTerrainVolumeSupports,
+  projectGeometryToTexture,
+  type TerrainMeshData,
+  type TerrainSupportMeshData,
+} from "@/lib/terrain-model-mesh";
 import { observeTerrainModel, TerrainModelRequestError, type TerrainModelResponse } from "@/lib/terrain-model";
 import "@/components/IsolatedTerrainView.css";
 
@@ -17,6 +23,17 @@ type IsolatedTerrainViewProps = {
 };
 
 type LoadState = { status: "loading" } | { status: "ready"; model: TerrainModelResponse } | { status: "error"; message: string };
+type ModelShape = "surface" | "volume";
+
+const MODEL_SHAPE_STORAGE_KEY = "cv-gis-isolated-terrain-shape";
+
+function readModelShape(): ModelShape {
+  try {
+    return window.sessionStorage.getItem(MODEL_SHAPE_STORAGE_KEY) === "surface" ? "surface" : "volume";
+  } catch {
+    return "volume";
+  }
+}
 
 const numberFormat = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1 });
 
@@ -111,12 +128,22 @@ function createGeometry(data: TerrainMeshData): THREE.BufferGeometry {
   return geometry;
 }
 
+function createSupportGeometry(data: TerrainSupportMeshData): THREE.BufferGeometry {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(data.positions, 3));
+  geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
+  geometry.computeVertexNormals();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
 export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, theme, onClose }: IsolatedTerrainViewProps) {
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
   const [retryVersion, setRetryVersion] = useState(0);
   const [rendererVersion, setRendererVersion] = useState(0);
   const [rendererError, setRendererError] = useState<string | null>(null);
   const [exaggeration, setExaggeration] = useState(1);
+  const [modelShape, setModelShape] = useState<ModelShape>(readModelShape);
   const dialogRef = useRef<HTMLDivElement>(null);
   const canvasHostRef = useRef<HTMLDivElement>(null);
   const northIndicatorRef = useRef<HTMLSpanElement>(null);
@@ -124,12 +151,18 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const modelGroupRef = useRef<THREE.Group | null>(null);
+  const supportGroupRef = useRef<THREE.Group | null>(null);
+  const modelShapeRef = useRef(modelShape);
   const resetViewRef = useRef<(() => void) | null>(null);
   const themeRef = useRef(theme);
   const frameRequestRef = useRef<number | null>(null);
   const meshData = useMemo(
     () => loadState.status === "ready" ? buildTerrainMesh(loadState.model.grid) : null,
     [loadState],
+  );
+  const volumeSupportData = useMemo(
+    () => meshData ? buildTerrainVolumeSupports(meshData) : null,
+    [meshData],
   );
 
   useEffect(() => {
@@ -214,6 +247,25 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
     const terrainMesh = new THREE.Mesh(surface, material);
     terrainMesh.name = "Copernicus elevation grid with draped alternative";
     terrainGroup.add(terrainMesh);
+
+    const supportGroup = new THREE.Group();
+    supportGroup.name = "Graphic volume supports";
+    supportGroup.visible = modelShapeRef.current === "volume";
+    if (volumeSupportData && volumeSupportData.walls.triangleCount > 0 && volumeSupportData.base.triangleCount > 0) {
+      const wallGeometry = createSupportGeometry(volumeSupportData.walls);
+      const wallMaterial = new THREE.MeshStandardMaterial({ color: "#a28d68", roughness: 0.94, metalness: 0 });
+      const walls = new THREE.Mesh(wallGeometry, wallMaterial);
+      walls.name = "Vertical walls along valid surface boundaries";
+      supportGroup.add(walls);
+
+      const baseGeometry = createSupportGeometry(volumeSupportData.base);
+      const baseMaterial = new THREE.MeshStandardMaterial({ color: "#746448", roughness: 1, metalness: 0 });
+      const base = new THREE.Mesh(baseGeometry, baseMaterial);
+      base.name = "Projected base under valid terrain triangles";
+      supportGroup.add(base);
+    }
+    terrainGroup.add(supportGroup);
+    supportGroupRef.current = supportGroup;
     scene.add(terrainGroup);
 
     const ambient = new THREE.HemisphereLight(0xf2f7f4, 0x66705d, 1.55);
@@ -229,15 +281,19 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
     const { east: gridEast, north: gridNorth } = loadState.model.grid.sample_spacing_m;
     const spanX = (loadState.model.grid.columns - 1) * gridEast;
     const spanZ = (loadState.model.grid.rows - 1) * gridNorth;
-    const spanY = Math.max(1, (meshData.maximumElevationM ?? 0) - (meshData.minimumElevationM ?? 0));
+    const baseY = (volumeSupportData?.baseElevationM ?? meshData.minimumElevationM ?? 0) - meshData.referenceElevationM;
+    const maximumY = (meshData.maximumElevationM ?? 0) - meshData.referenceElevationM;
+    const targetY = (baseY + maximumY) / 2;
+    const spanY = Math.max(1, maximumY - baseY);
     const maxSpan = Math.max(spanX, spanZ, spanY, 1);
-    const distance = maxSpan * 1.25 / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-    const initialCameraPosition = new THREE.Vector3(distance * 0.72, distance * 0.82, distance * 0.92);
+    const aspectFit = Math.max(1, height / width);
+    const distance = maxSpan * 0.62 * aspectFit / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+    const initialCameraPosition = new THREE.Vector3(distance * 0.72, targetY + distance * 0.82, distance * 0.92);
     camera.position.copy(initialCameraPosition);
-    camera.lookAt(0, 0, 0);
+    camera.lookAt(0, targetY, 0);
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(0, 0, 0);
+    controls.target.set(0, targetY, 0);
     controls.enableDamping = false;
     controls.screenSpacePanning = true;
     controls.minDistance = Math.max(0.5, maxSpan * 0.18);
@@ -248,9 +304,9 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
 
     const resetView = () => {
       camera.position.copy(initialCameraPosition);
-      controls.target.set(0, 0, 0);
+      controls.target.set(0, targetY, 0);
       controls.update();
-      camera.lookAt(0, 0, 0);
+      camera.lookAt(0, targetY, 0);
       updateNorth();
       render();
     };
@@ -312,6 +368,12 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
       frameRequestRef.current = null;
       surface.dispose();
       material.dispose();
+      for (const child of supportGroup.children) {
+        if (!(child instanceof THREE.Mesh)) continue;
+        child.geometry.dispose();
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        materials.forEach((supportMaterial) => supportMaterial.dispose());
+      }
       texture.dispose();
       terrainGroup.clear();
       scene.clear();
@@ -321,9 +383,30 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
       sceneRef.current = null;
       cameraRef.current = null;
       modelGroupRef.current = null;
+      supportGroupRef.current = null;
       resetViewRef.current = null;
     };
-  }, [loadState, meshData, rendererVersion]);
+  }, [loadState, meshData, rendererVersion, volumeSupportData]);
+
+  useEffect(() => {
+    modelShapeRef.current = modelShape;
+    try {
+      window.sessionStorage.setItem(MODEL_SHAPE_STORAGE_KEY, modelShape);
+    } catch {
+      // The current view still works when session storage is unavailable.
+    }
+    const supportGroup = supportGroupRef.current;
+    if (supportGroup) supportGroup.visible = modelShape === "volume";
+    const renderer = rendererRef.current;
+    const scene = sceneRef.current;
+    const camera = cameraRef.current;
+    if (renderer && scene && camera && frameRequestRef.current === null) {
+      frameRequestRef.current = requestAnimationFrame(() => {
+        frameRequestRef.current = null;
+        renderer.render(scene, camera);
+      });
+    }
+  }, [modelShape]);
 
   useEffect(() => {
     const group = modelGroupRef.current;
@@ -467,6 +550,25 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
               <span>Superficie de la alternativa</span>
               <strong>{formatArea(areaAreaM2)}</strong>
               <small>Medida de la ficha; no se recalcula aquí.</small>
+            </div>
+
+            <div className="isolated-terrain-shape-control" role="group" aria-label="Forma del modelo 3D">
+              <span>Representación</span>
+              <div className="isolated-terrain-shape-options">
+                <button
+                  type="button"
+                  aria-pressed={modelShape === "surface"}
+                  onClick={() => setModelShape("surface")}
+                >Superficie</button>
+                <button
+                  type="button"
+                  aria-pressed={modelShape === "volume"}
+                  onClick={() => setModelShape("volume")}
+                >Volumen</button>
+              </div>
+              {modelShape === "volume" && volumeSupportData && (
+                <small>Grosor gráfico: {formatMeters(volumeSupportData.thicknessM)} bajo la cota mínima. No representa profundidad geológica ni volumen real del terreno.</small>
+              )}
             </div>
 
             <div className="isolated-terrain-control">

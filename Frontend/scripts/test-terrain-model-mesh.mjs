@@ -32,6 +32,41 @@ function triangleNormalY(mesh, offset = 0) {
   return ab[2] * ac[0] - ab[0] * ac[2];
 }
 
+function triangleNormal(mesh, offset = 0) {
+  const [a, b, c] = [0, 1, 2].map((part) => vertex(mesh, mesh.indices[offset + part]));
+  const ab = b.map((value, index) => value - a[index]);
+  const ac = c.map((value, index) => value - a[index]);
+  return [
+    ab[1] * ac[2] - ab[2] * ac[1],
+    ab[2] * ac[0] - ab[0] * ac[2],
+    ab[0] * ac[1] - ab[1] * ac[0],
+  ];
+}
+
+function assertValidTriangles(mesh) {
+  assert.ok(Array.from(mesh.indices).every((index) => index >= 0 && index < mesh.positions.length / 3));
+  for (let offset = 0; offset < mesh.indices.length; offset += 3) {
+    const normal = triangleNormal(mesh, offset);
+    assert.ok(normal.every(Number.isFinite));
+    assert.ok(Math.hypot(...normal) > 1e-5, `degenerate triangle at index ${offset / 3}`);
+  }
+}
+
+function geometricEdgeUseCounts(meshes) {
+  const key = (mesh, index) => vertex(mesh, index).map((value) => value.toFixed(4)).join(",");
+  const counts = new Map();
+  for (const mesh of meshes) {
+    for (let offset = 0; offset < mesh.indices.length; offset += 3) {
+      const triangle = [0, 1, 2].map((part) => key(mesh, mesh.indices[offset + part]));
+      for (const [a, b] of [[triangle[0], triangle[1]], [triangle[1], triangle[2]], [triangle[2], triangle[0]]]) {
+        const edgeKey = a < b ? `${a}|${b}` : `${b}|${a}`;
+        counts.set(edgeKey, (counts.get(edgeKey) ?? 0) + 1);
+      }
+    }
+  }
+  return counts;
+}
+
 const cases = [];
 function test(name, action) {
   action();
@@ -146,6 +181,99 @@ test("position and index buffers contain finite coordinates and in-range indices
   assert.ok(Array.from(data.positions).every(Number.isFinite));
   assert.ok(Array.from(data.uvs).every(Number.isFinite));
   assert.ok(Array.from(data.indices).every((index) => index >= 0 && index < data.positions.length / 3));
+});
+
+test("flat rectangular terrain receives a proportional closed volume without changing its surface", () => {
+  const data = meshModule.buildTerrainMesh(grid([[120, 120, 120], [120, 120, 120], [120, 120, 120]], 12, 30));
+  const originalPositions = Array.from(data.positions);
+  const originalIndices = Array.from(data.indices);
+  const volume = meshModule.buildTerrainVolumeSupports(data);
+  assert.equal(data.triangleCount, 8);
+  assert.equal(volume.boundaryEdgeCount, 8);
+  assert.equal(volume.base.triangleCount, data.triangleCount);
+  assert.equal(volume.walls.triangleCount, 16);
+  assert.equal(volume.thicknessM, 2.88);
+  assert.ok(volume.baseElevationM < data.minimumElevationM);
+  assert.ok(Array.from(volume.base.positions).filter((_, index) => index % 3 === 1).every((height) => Math.abs(height + 2.88) < 1e-5));
+  assert.deepEqual(Array.from(data.positions), originalPositions);
+  assert.deepEqual(Array.from(data.indices), originalIndices);
+
+  const allEdges = geometricEdgeUseCounts([data, volume.walls, volume.base]);
+  assert.ok(Array.from(allEdges.values()).every((uses) => uses === 2), "closed shell edges must be shared by exactly two faces");
+  assertValidTriangles(data);
+  assertValidTriangles(volume.walls);
+  assertValidTriangles(volume.base);
+});
+
+test("mountain walls start on the real surface and their normals face out from the footprint", () => {
+  const data = meshModule.buildTerrainMesh(grid([[0, 40, 0], [20, 120, 30], [0, 35, -10]]));
+  const volume = meshModule.buildTerrainVolumeSupports(data);
+  assert.ok(data.maximumElevationM - data.minimumElevationM > 100);
+  assert.ok(volume.baseElevationM < data.minimumElevationM);
+  const surfaceHeights = new Map();
+  for (let index = 0; index < data.positions.length; index += 3) {
+    surfaceHeights.set(`${data.positions[index].toFixed(4)},${data.positions[index + 2].toFixed(4)}`, data.positions[index + 1]);
+  }
+
+  for (let edge = 0; edge < volume.boundaryEdgeCount; edge += 1) {
+    const firstVertex = edge * 4;
+    const topA = vertex(volume.walls, firstVertex);
+    const topB = vertex(volume.walls, firstVertex + 1);
+    const normal = triangleNormal(volume.walls, edge * 6);
+    const midpoint = [(topA[0] + topB[0]) / 2, (topA[2] + topB[2]) / 2];
+    assert.ok(normal[0] * midpoint[0] + normal[2] * midpoint[1] > 0, "boundary wall normal must face outward");
+    for (const point of [topA, topB]) {
+      assert.equal(point[1], surfaceHeights.get(`${point[0].toFixed(4)},${point[2].toFixed(4)}`));
+    }
+  }
+  assert.ok(triangleNormalY(volume.base) < 0, "underside triangles must face down");
+});
+
+test("negative elevations keep the visual base below every valid sample", () => {
+  const data = meshModule.buildTerrainMesh(grid([[-120, -40], [-80, -10]], 15, 25));
+  const volume = meshModule.buildTerrainVolumeSupports(data);
+  assert.equal(data.minimumElevationM, -120);
+  assert.ok(volume.baseElevationM < -120);
+  assert.ok(volume.baseElevationM < data.minimumElevationM);
+});
+
+test("partial NoData creates supports only for the triangles that actually exist", () => {
+  const data = meshModule.buildTerrainMesh(grid([[1, 2, 3], [4, null, 6], [7, 8, 9]]));
+  const volume = meshModule.buildTerrainVolumeSupports(data);
+  assert.equal(data.triangleCount, 4);
+  assert.equal(volume.base.triangleCount, data.triangleCount);
+  assert.equal(volume.boundaryEdgeCount, 12);
+  assert.equal(volume.walls.triangleCount, 24);
+  assertValidTriangles(volume.walls);
+  assertValidTriangles(volume.base);
+});
+
+test("separated valid regions receive separate projected bases without bridging NoData", () => {
+  const data = meshModule.buildTerrainMesh(grid([
+    [1, 1, null, null],
+    [1, 1, null, null],
+    [null, null, 8, 8],
+    [null, null, 8, 8],
+  ]));
+  const volume = meshModule.buildTerrainVolumeSupports(data);
+  assert.equal(data.triangleCount, 4);
+  assert.equal(volume.base.triangleCount, 4);
+  assert.equal(volume.boundaryEdgeCount, 8);
+  const baseXY = new Set(Array.from(volume.base.indices, (index) => (
+    `${volume.base.positions[index * 3].toFixed(1)},${volume.base.positions[index * 3 + 2].toFixed(1)}`
+  )));
+  assert.equal(baseXY.size, 8);
+});
+
+test("large volume bases use 32-bit indices while compact walls keep 16-bit indices", () => {
+  const values = Array.from({ length: 257 }, () => Array(257).fill(15));
+  const data = meshModule.buildTerrainMesh(grid(values, 30, 30));
+  const volume = meshModule.buildTerrainVolumeSupports(data);
+  assert.ok(data.indices instanceof Uint32Array);
+  assert.ok(volume.base.indices instanceof Uint32Array);
+  assert.ok(volume.walls.indices instanceof Uint16Array);
+  assertValidTriangles(volume.walls);
+  assertValidTriangles(volume.base);
 });
 
 console.log(`terrain mesh checks: ${cases.length} passed`);

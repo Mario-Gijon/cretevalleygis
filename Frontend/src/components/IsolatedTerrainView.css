@@ -315,10 +315,63 @@
 }
 
 .isolated-terrain-metric small,
-.isolated-terrain-control small {
+.isolated-terrain-control small,
+.isolated-terrain-shape-control small {
   color: var(--muted);
   font-size: 8px;
   line-height: 1.4;
+}
+
+.isolated-terrain-shape-control {
+  display: grid;
+  gap: 7px;
+  padding: 10px 2px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.isolated-terrain-shape-control > span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.isolated-terrain-shape-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-soft);
+}
+
+.isolated-terrain-shape-options button {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 9px;
+  font-weight: 560;
+  cursor: pointer;
+}
+
+.isolated-terrain-shape-options button[aria-pressed="true"] {
+  border-color: var(--border);
+  background: var(--surface-raised);
+  color: var(--cv-blue);
+  box-shadow: 0 1px 3px rgb(5 41 76 / 9%);
+}
+
+.app-shell[data-theme="dark"] .isolated-terrain-shape-options button[aria-pressed="true"] {
+  color: #91dedb;
+}
+
+.isolated-terrain-shape-options button:focus-visible {
+  outline: 2px solid var(--cv-teal);
+  outline-offset: 1px;
 }
 
 .isolated-terrain-control {
@@ -497,6 +550,7 @@
   }
 
   .isolated-terrain-metric--primary,
+  .isolated-terrain-shape-control,
   .isolated-terrain-control,
   .isolated-terrain-data-list,
   .isolated-terrain-coverage,

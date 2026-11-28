@@ -14,6 +14,20 @@ export type TerrainMeshData = {
   sampleCenterBounds: { west: number; south: number; east: number; north: number };
 };
 
+export type TerrainSupportMeshData = {
+  positions: Float32Array;
+  indices: Uint16Array | Uint32Array;
+  triangleCount: number;
+};
+
+export type TerrainVolumeSupportData = {
+  walls: TerrainSupportMeshData;
+  base: TerrainSupportMeshData;
+  boundaryEdgeCount: number;
+  thicknessM: number;
+  baseElevationM: number | null;
+};
+
 export type TexturePolygon = {
   rings: Array<Array<[number, number]>>;
 };
@@ -130,6 +144,128 @@ export function buildTerrainMesh(grid: TerrainGrid): TerrainMeshData {
     minimumElevationM,
     maximumElevationM,
     sampleCenterBounds: { west: frame.west, south: frame.south, east: frame.east, north: frame.north },
+  };
+}
+
+function toIndexArray(indices: number[], vertexCount: number): Uint16Array | Uint32Array {
+  const IndexArray = vertexCount > 65_536 ? Uint32Array : Uint16Array;
+  return new IndexArray(indices);
+}
+
+function triangleAreaSquared(positions: Float32Array, a: number, b: number, c: number): number {
+  const ax = positions[a * 3];
+  const ay = positions[a * 3 + 1];
+  const az = positions[a * 3 + 2];
+  const abx = positions[b * 3] - ax;
+  const aby = positions[b * 3 + 1] - ay;
+  const abz = positions[b * 3 + 2] - az;
+  const acx = positions[c * 3] - ax;
+  const acy = positions[c * 3 + 1] - ay;
+  const acz = positions[c * 3 + 2] - az;
+  const crossX = aby * acz - abz * acy;
+  const crossY = abz * acx - abx * acz;
+  const crossZ = abx * acy - aby * acx;
+  return crossX * crossX + crossY * crossY + crossZ * crossZ;
+}
+
+/**
+ * Creates a flat underside and vertical boundary walls from the valid surface
+ * triangles only. Open edges around NoData become their own boundaries, so
+ * disconnected valid regions are never bridged by a rectangular box.
+ */
+export function buildTerrainVolumeSupports(
+  surface: TerrainMeshData,
+  thicknessRatio = 0.12,
+): TerrainVolumeSupportData {
+  const emptySupport = (): TerrainSupportMeshData => ({
+    positions: new Float32Array(0),
+    indices: new Uint16Array(0),
+    triangleCount: 0,
+  });
+  if (!Number.isFinite(thicknessRatio) || thicknessRatio <= 0 || thicknessRatio >= 1) {
+    throw new RangeError("The terrain volume thickness ratio must be between 0 and 1.");
+  }
+  if (surface.triangleCount === 0 || surface.minimumElevationM === null) {
+    return { walls: emptySupport(), base: emptySupport(), boundaryEdgeCount: 0, thicknessM: 0, baseElevationM: null };
+  }
+
+  const bounds = surface.sampleCenterBounds;
+  const horizontalSpan = Math.min(bounds.east - bounds.west, bounds.north - bounds.south);
+  if (!Number.isFinite(horizontalSpan) || horizontalSpan <= 0) {
+    return { walls: emptySupport(), base: emptySupport(), boundaryEdgeCount: 0, thicknessM: 0, baseElevationM: null };
+  }
+
+  const thicknessM = horizontalSpan * thicknessRatio;
+  const baseElevationM = surface.minimumElevationM - thicknessM;
+  const baseY = baseElevationM - surface.referenceElevationM;
+  const vertexCount = surface.positions.length / 3;
+  const basePositions = new Float32Array(surface.positions.length);
+  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+    const offset = vertex * 3;
+    basePositions[offset] = surface.positions[offset];
+    basePositions[offset + 1] = baseY;
+    basePositions[offset + 2] = surface.positions[offset + 2];
+  }
+
+  const baseIndices: number[] = [];
+  const edges = new Map<string, { a: number; b: number; count: number }>();
+  const addEdge = (a: number, b: number) => {
+    const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+    const edge = edges.get(key);
+    if (edge) edge.count += 1;
+    else edges.set(key, { a, b, count: 1 });
+  };
+
+  for (let offset = 0; offset + 2 < surface.indices.length; offset += 3) {
+    const a = surface.indices[offset];
+    const b = surface.indices[offset + 1];
+    const c = surface.indices[offset + 2];
+    if (a >= vertexCount || b >= vertexCount || c >= vertexCount || a === b || b === c || c === a) continue;
+    if (triangleAreaSquared(surface.positions, a, b, c) <= 1e-10) continue;
+
+    baseIndices.push(a, c, b);
+    addEdge(a, b);
+    addEdge(b, c);
+    addEdge(c, a);
+  }
+
+  const wallPositions: number[] = [];
+  const wallIndices: number[] = [];
+  let boundaryEdgeCount = 0;
+  for (const edge of edges.values()) {
+    if (edge.count !== 1) continue;
+    const topA = edge.a;
+    const topB = edge.b;
+    const ax = surface.positions[topA * 3];
+    const ay = surface.positions[topA * 3 + 1];
+    const az = surface.positions[topA * 3 + 2];
+    const bx = surface.positions[topB * 3];
+    const by = surface.positions[topB * 3 + 1];
+    const bz = surface.positions[topB * 3 + 2];
+    const horizontalLengthSquared = (bx - ax) ** 2 + (bz - az) ** 2;
+    if (!Number.isFinite(horizontalLengthSquared) || horizontalLengthSquared <= 1e-10) continue;
+
+    const firstVertex = wallPositions.length / 3;
+    wallPositions.push(ax, ay, az, bx, by, bz, ax, baseY, az, bx, baseY, bz);
+    // Reverse the upward-facing triangle boundary so the side normal points out.
+    wallIndices.push(firstVertex + 1, firstVertex, firstVertex + 2, firstVertex + 1, firstVertex + 2, firstVertex + 3);
+    boundaryEdgeCount += 1;
+  }
+
+  return {
+    walls: {
+      positions: new Float32Array(wallPositions),
+      indices: toIndexArray(wallIndices, wallPositions.length / 3),
+      triangleCount: wallIndices.length / 3,
+    },
+    base: {
+      positions: basePositions,
+      indices: toIndexArray(baseIndices, vertexCount),
+      triangleCount: baseIndices.length / 3,
+    },
+    boundaryEdgeCount,
+    thicknessM,
+    baseElevationM,
   };
 }
 
