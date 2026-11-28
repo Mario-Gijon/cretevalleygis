@@ -15,8 +15,15 @@ import {
 import {
   ABSOLUTE_MODEL_ELEVATION_MAX_M,
   ABSOLUTE_MODEL_ELEVATION_MIN_M,
+  ASPECT_THEME_LEGEND,
+  SLOPE_THEME_LEGEND,
+  TERRAIN_THEME_NODATA_COLOR,
+  buildCategoricalColors,
+  buildCategoricalSampleUvs,
+  categoricalColorsToRgba,
   buildTerrainVertexColors,
   terrainModelLegendStops,
+  type TerrainModelBaseTheme,
   type TerrainModelTheme,
 } from "@/lib/terrain-model-styles";
 import { observeTerrainModel, TerrainModelRequestError, type TerrainModelResponse } from "@/lib/terrain-model";
@@ -30,7 +37,11 @@ type IsolatedTerrainViewProps = {
   onClose: () => void;
 };
 
-type LoadState = { status: "loading" } | { status: "ready"; model: TerrainModelResponse } | { status: "error"; message: string };
+type LoadState = { status: "loading" } | {
+  status: "ready";
+  model: TerrainModelResponse;
+  derivativesUnavailableReason: string | null;
+} | { status: "error"; message: string };
 type ModelShape = "surface" | "volume";
 type BoundaryMode = "fill" | "outline" | "hidden";
 
@@ -71,6 +82,50 @@ function readModelShape(): ModelShape {
   return readChoice(MODEL_SHAPE_STORAGE_KEY, ["surface", "volume"], "volume");
 }
 
+function availableThematicThemes(model: TerrainModelResponse | null): { slope: boolean; aspect: boolean } {
+  if (model?.schema_version !== "1.1") return { slope: false, aspect: false };
+  return {
+    slope: model.derivatives.slope.coverage.availability !== "no_data",
+    aspect: model.derivatives.aspect.coverage.availability !== "no_data",
+  };
+}
+
+function effectiveTerrainTheme(theme: TerrainModelTheme, model: TerrainModelResponse | null): TerrainModelTheme {
+  const available = availableThematicThemes(model);
+  if (theme === "slope" && !available.slope) return "natural";
+  if (theme === "aspect" && !available.aspect) return "natural";
+  return theme;
+}
+
+function isCategoricalTheme(theme: TerrainModelTheme): theme is "slope" | "aspect" {
+  return theme === "slope" || theme === "aspect";
+}
+
+function createCategoricalTexture(model: TerrainModelResponse, theme: "slope" | "aspect"): THREE.CanvasTexture | null {
+  if (model.schema_version !== "1.1") return null;
+  const { columns, rows } = model.grid;
+  const canvas = document.createElement("canvas");
+  canvas.width = columns;
+  canvas.height = rows;
+  const context = canvas.getContext("2d", { alpha: false });
+  if (!context) return null;
+  const pixels = categoricalColorsToRgba(buildCategoricalColors(theme, model.derivatives));
+  const image = context.createImageData(columns, rows);
+  image.data.set(pixels);
+  context.putImageData(image, 0, 0);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.flipY = true;
+  texture.channel = 1;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.minFilter = THREE.NearestFilter;
+  texture.magFilter = THREE.NearestFilter;
+  texture.generateMipmaps = false;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 const numberFormat = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1 });
 const integerFormat = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0 });
 
@@ -85,6 +140,13 @@ function translateWarning(warning: string): string {
   if (/surrounding context was limited/i.test(warning)) return "El terreno disponible limita el margen de contexto alrededor de la alternativa.";
   if (/reduced with bilinear sampling/i.test(warning)) return "La ventana se redujo con muestreo bilineal; no se ha añadido detalle por debajo de la resolución fuente.";
   if (/remain null/i.test(warning)) return "Las zonas sin elevación válida quedan abiertas y no se rellenan.";
+  if (/the thematic grid is sampled/i.test(warning)) return "La cuadrícula temática muestra muestras de la fuente en posiciones comunes; no es una agregación por superficie ni una distribución zonal.";
+  if (/nearest-neighbour samples/i.test(warning)) return "Pendiente y orientación usan el vecino más próximo en los centros de la cuadrícula; la elevación mantiene el muestreo bilineal.";
+  if (/negative slope samples were excluded/i.test(warning)) return warning.replace(/negative slope samples were excluded as invalid\./i, "muestras de pendiente negativas se excluyeron por ser inválidas.");
+  if (/aspect samples outside 0–360 degrees were excluded/i.test(warning)) return warning.replace(/aspect samples outside 0–360 degrees were excluded as invalid\./i, "muestras de orientación fuera de 0–360° se excluyeron por ser inválidas.");
+  if (/older style-revision tag/i.test(warning)) return "Los rásteres tienen una revisión de estilo anterior al manifiesto; se han validado algoritmo Horn, checksum, unidades y cuadrícula, sin regenerarlos.";
+  if (/flat-slope threshold/i.test(warning)) return "NoData de orientación solo se marca como plano cuando la pendiente coincide con el umbral configurado; el resto permanece sin datos.";
+  if (/missing or invalid slope samples/i.test(warning)) return "Las muestras de pendiente ausentes o inválidas permanecen sin datos; no se deducen de la elevación.";
   return warning;
 }
 
@@ -162,10 +224,11 @@ function createSupportGeometry(data: TerrainSupportMeshData): THREE.BufferGeomet
 
 function supportMaterialColors(modelTheme: TerrainModelTheme): { wall: string; base: string } {
   if (modelTheme === "hillshade") return { wall: "#a1a6a4", base: "#686f70" };
+  if (isCategoricalTheme(modelTheme)) return { wall: "#a1a6a4", base: "#686f70" };
   return { wall: "#a28d68", base: "#746448" };
 }
 
-function legendGradient(theme: Exclude<TerrainModelTheme, "hillshade">): string {
+function legendGradient(theme: Exclude<TerrainModelBaseTheme, "hillshade">): string {
   const stops = terrainModelLegendStops(theme).map(({ position, color }) => `${color} ${position}%`).join(", ");
   return `linear-gradient(90deg, ${stops})`;
 }
@@ -177,7 +240,11 @@ function updateTerrainLighting(
   modelTheme: TerrainModelTheme,
 ): void {
   if (!ambient || !directional) return;
-  if (modelTheme === "hillshade") {
+  if (isCategoricalTheme(modelTheme)) {
+    ambient.intensity = appTheme === "dark" ? 1.35 : 1.42;
+    directional.intensity = 0.7;
+    directional.color.set("#ffffff");
+  } else if (modelTheme === "hillshade") {
     ambient.intensity = appTheme === "dark" ? 0.82 : 0.72;
     directional.intensity = appTheme === "dark" ? 2.05 : 2.25;
     directional.color.set(appTheme === "dark" ? "#e4e8e7" : "#fff4dc");
@@ -208,7 +275,7 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
   const [rendererError, setRendererError] = useState<string | null>(null);
   const [exaggeration, setExaggeration] = useState(readSessionExaggeration);
   const [modelShape, setModelShape] = useState<ModelShape>(readModelShape);
-  const [terrainTheme, setTerrainTheme] = useState<TerrainModelTheme>(() => readChoice(MODEL_THEME_STORAGE_KEY, ["natural", "elevation", "hillshade"], "natural"));
+  const [terrainTheme, setTerrainTheme] = useState<TerrainModelTheme>(() => readChoice(MODEL_THEME_STORAGE_KEY, ["natural", "elevation", "hillshade", "slope", "aspect"], "natural"));
   const [boundaryMode, setBoundaryMode] = useState<BoundaryMode>(() => readChoice(MODEL_BOUNDARY_STORAGE_KEY, ["fill", "outline", "hidden"], "fill"));
   const [showTriangularMesh, setShowTriangularMesh] = useState(() => readSessionBoolean(MODEL_WIREFRAME_STORAGE_KEY, false));
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -225,6 +292,7 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
   const supportBaseMaterialRef = useRef<THREE.MeshStandardMaterial | null>(null);
   const wireframeMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
   const boundaryTextureRef = useRef<THREE.CanvasTexture | null>(null);
+  const thematicTexturesRef = useRef<Partial<Record<"slope" | "aspect", THREE.CanvasTexture>>>({});
   const boundaryCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const boundaryMeshRef = useRef<THREE.Mesh | null>(null);
   const wireframeRef = useRef<THREE.LineSegments | null>(null);
@@ -253,8 +321,8 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
     let active = true;
     setLoadState({ status: "loading" });
     setRendererError(null);
-    observation.promise.then((model) => {
-      if (active) setLoadState({ status: "ready", model });
+    observation.promise.then(({ model, derivativesUnavailableReason }) => {
+      if (active) setLoadState({ status: "ready", model, derivativesUnavailableReason });
     }).catch((error: unknown) => {
       if (!active || (error instanceof DOMException && error.name === "AbortError")) return;
       const message = error instanceof TerrainModelRequestError
@@ -322,10 +390,24 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
     modelGroupRef.current = terrainGroup;
 
     const surface = createGeometry(meshData);
+    const thematicAvailability = availableThematicThemes(loadState.model);
+    if (thematicAvailability.slope || thematicAvailability.aspect) {
+      surface.setAttribute("uv1", new THREE.BufferAttribute(
+        buildCategoricalSampleUvs(loadState.model.grid.columns, loadState.model.grid.rows),
+        2,
+      ));
+    }
+    const slopeTexture = thematicAvailability.slope ? createCategoricalTexture(loadState.model, "slope") : null;
+    const aspectTexture = thematicAvailability.aspect ? createCategoricalTexture(loadState.model, "aspect") : null;
+    thematicTexturesRef.current = {
+      ...(slopeTexture ? { slope: slopeTexture } : {}),
+      ...(aspectTexture ? { aspect: aspectTexture } : {}),
+    };
+    const initialTheme = effectiveTerrainTheme(terrainThemeRef.current, loadState.model);
     const elevationRange = loadState.model.sampled_elevation_range_m;
     const vertexColors = buildTerrainVertexColors(
       loadState.model.grid,
-      terrainThemeRef.current,
+      isCategoricalTheme(initialTheme) ? "natural" : initialTheme,
       elevationRange?.minimum ?? meshData.minimumElevationM ?? 0,
       elevationRange?.maximum ?? meshData.maximumElevationM ?? 0,
     );
@@ -333,8 +415,9 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
     surface.setAttribute("color", colorAttribute);
     surfaceColorAttributeRef.current = colorAttribute;
     const material = new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      roughness: terrainThemeRef.current === "hillshade" ? 1 : 0.88,
+      map: initialTheme === "slope" ? slopeTexture : initialTheme === "aspect" ? aspectTexture : null,
+      vertexColors: !isCategoricalTheme(initialTheme),
+      roughness: initialTheme === "hillshade" ? 1 : 0.88,
       metalness: 0,
       side: THREE.FrontSide,
     });
@@ -397,7 +480,7 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
     const supportGroup = new THREE.Group();
     supportGroup.name = "Graphic volume supports";
     supportGroup.visible = modelShapeRef.current === "volume";
-    const supportColors = supportMaterialColors(terrainThemeRef.current);
+    const supportColors = supportMaterialColors(initialTheme);
     if (volumeSupportData && volumeSupportData.walls.triangleCount > 0 && volumeSupportData.base.triangleCount > 0) {
       const wallGeometry = createSupportGeometry(volumeSupportData.walls);
       const wallMaterial = new THREE.MeshStandardMaterial({ color: supportColors.wall, roughness: 0.94, metalness: 0 });
@@ -534,6 +617,7 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
       material.dispose();
       boundaryMaterial.dispose();
       boundaryTexture.dispose();
+      Object.values(thematicTexturesRef.current).forEach((texture) => texture?.dispose());
       if (wireframe) {
         wireframe.geometry.dispose();
         const wireMaterials = Array.isArray(wireframe.material) ? wireframe.material : [wireframe.material];
@@ -560,6 +644,7 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
       supportBaseMaterialRef.current = null;
       wireframeMaterialRef.current = null;
       boundaryTextureRef.current = null;
+      thematicTexturesRef.current = {};
       boundaryCanvasRef.current = null;
       boundaryMeshRef.current = null;
       wireframeRef.current = null;
@@ -578,14 +663,15 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
   }, [modelShape]);
 
   useEffect(() => {
-    terrainThemeRef.current = terrainTheme;
     const model = loadState.status === "ready" ? loadState.model : null;
+    const activeTheme = effectiveTerrainTheme(terrainTheme, model);
+    terrainThemeRef.current = activeTheme;
     const colorAttribute = surfaceColorAttributeRef.current;
     if (model && colorAttribute) {
       const range = model.sampled_elevation_range_m;
       const colors = buildTerrainVertexColors(
         model.grid,
-        terrainTheme,
+        isCategoricalTheme(activeTheme) ? "natural" : activeTheme,
         range?.minimum ?? 0,
         range?.maximum ?? 0,
       );
@@ -593,11 +679,21 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
       colorAttribute.needsUpdate = true;
     }
     const material = surfaceMaterialRef.current;
-    if (material) material.roughness = terrainTheme === "hillshade" ? 1 : 0.88;
-    const supportColors = supportMaterialColors(terrainTheme);
+    if (material) {
+      const nextMap = activeTheme === "slope" ? thematicTexturesRef.current.slope
+        : activeTheme === "aspect" ? thematicTexturesRef.current.aspect
+          : null;
+      const nextVertexColors = !isCategoricalTheme(activeTheme);
+      const programChanged = material.map !== nextMap || material.vertexColors !== nextVertexColors;
+      material.map = nextMap ?? null;
+      material.vertexColors = nextVertexColors;
+      material.roughness = activeTheme === "hillshade" ? 1 : 0.88;
+      if (programChanged) material.needsUpdate = true;
+    }
+    const supportColors = supportMaterialColors(activeTheme);
     supportWallMaterialRef.current?.color.set(supportColors.wall);
     supportBaseMaterialRef.current?.color.set(supportColors.base);
-    updateTerrainLighting(ambientLightRef.current, directionalLightRef.current, themeRef.current, terrainTheme);
+    updateTerrainLighting(ambientLightRef.current, directionalLightRef.current, themeRef.current, activeTheme);
     scheduleSceneRender(rendererRef.current, sceneRef.current, cameraRef.current, frameRequestRef);
   }, [terrainTheme, loadState]);
 
@@ -670,6 +766,9 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
   };
 
   const model = loadState.status === "ready" ? loadState.model : null;
+  const themeAvailability = availableThematicThemes(model);
+  const activeTerrainTheme = effectiveTerrainTheme(terrainTheme, model);
+  const derivativeUnavailableReason = loadState.status === "ready" ? loadState.derivativesUnavailableReason : null;
   const surfaceMissing = model && meshData && meshData.triangleCount === 0;
   const coveragePercent = model ? numberFormat.format(model.coverage.valid_sample_fraction * 100) : "0";
   const elevationTicks = [ABSOLUTE_MODEL_ELEVATION_MIN_M, 0, ABSOLUTE_MODEL_ELEVATION_MAX_M].map((valueM) => ({
@@ -678,6 +777,17 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
       / (ABSOLUTE_MODEL_ELEVATION_MAX_M - ABSOLUTE_MODEL_ELEVATION_MIN_M) * 100,
     label: `${integerFormat.format(valueM).replace("-", "−")} m`,
   }));
+  const aspectCoverage = model?.schema_version === "1.1" ? model.derivatives.aspect.coverage : null;
+  const slopeCoverage = model?.schema_version === "1.1" ? model.derivatives.slope.coverage : null;
+  const sampleMethodLabel = model?.schema_version === "1.1"
+    ? model.derivatives.sampling_method === "native_pixel_centres"
+      ? "Centros de píxel nativos"
+      : "Vecino más próximo en centros comunes"
+    : "No disponible";
+  const derivativeWarnings = model?.schema_version === "1.1" ? model.derivatives.warnings : [];
+  const categoryCoveragePercent = (coverage: { fraction_of_elevation_samples_covered: number } | null) => (
+    coverage ? numberFormat.format(coverage.fraction_of_elevation_samples_covered * 100) : "0"
+  );
 
   return (
     <div
@@ -797,19 +907,41 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
             <div className="isolated-terrain-theme-control" role="group" aria-label="Representación temática">
               <span>REPRESENTACIÓN TEMÁTICA</span>
               <div className="isolated-terrain-theme-options">
-                <button type="button" aria-pressed={terrainTheme === "natural"} onClick={() => setTerrainTheme("natural")}>Relieve natural</button>
-                <button type="button" aria-pressed={terrainTheme === "elevation"} onClick={() => setTerrainTheme("elevation")}>Elevación absoluta</button>
-                <button type="button" aria-pressed={terrainTheme === "hillshade"} onClick={() => setTerrainTheme("hillshade")}>Relieve sombreado</button>
+                <button type="button" aria-pressed={activeTerrainTheme === "natural"} onClick={() => setTerrainTheme("natural")}>Relieve natural</button>
+                <button type="button" aria-pressed={activeTerrainTheme === "elevation"} onClick={() => setTerrainTheme("elevation")}>Elevación absoluta</button>
+                <button type="button" aria-pressed={activeTerrainTheme === "hillshade"} onClick={() => setTerrainTheme("hillshade")}>Relieve sombreado</button>
+                <button type="button" disabled={!themeAvailability.slope} aria-pressed={activeTerrainTheme === "slope"} onClick={() => setTerrainTheme("slope")}>Pendientes</button>
+                <button type="button" disabled={!themeAvailability.aspect} aria-pressed={activeTerrainTheme === "aspect"} onClick={() => setTerrainTheme("aspect")}>Orientación</button>
               </div>
-              <small>{terrainTheme === "natural"
+              <small>{activeTerrainTheme === "natural"
                 ? "Paleta relativa al rango local; un mismo tono puede representar otra cota en otra alternativa."
-                : terrainTheme === "elevation"
+                : activeTerrainTheme === "elevation"
                   ? "Colores fijos por cota en metros; las elevaciones negativas no se clasifican como agua."
-                  : "Iluminación gráfica para percibir el relieve; no representa el sol real ni una fecha y hora."}</small>
+                  : activeTerrainTheme === "hillshade"
+                    ? "Iluminación gráfica para percibir el relieve; no representa el sol real ni una fecha y hora."
+                    : activeTerrainTheme === "slope"
+                      ? "Pendiente Horn en porcentaje, sin convertir a grados ni valorar idoneidad."
+                      : "Dirección descendente respecto al norte de cuadrícula; no es norte geográfico."}</small>
             </div>
 
-            <div className={`isolated-terrain-legend isolated-terrain-legend--${terrainTheme}`} aria-label={`Leyenda: ${terrainTheme === "natural" ? "relieve natural" : terrainTheme === "elevation" ? "elevación absoluta" : "relieve sombreado"}`}>
-              {terrainTheme === "natural" && (
+            {derivativeUnavailableReason && model?.schema_version === "1.0" && (
+              <div className="isolated-terrain-derivative-status" role="status">
+                <strong>Derivados no disponibles</strong>
+                <span>{derivativeUnavailableReason} Se muestran los tres temas de elevación originales.</span>
+                <button type="button" className="isolated-terrain-retry" onClick={() => setRetryVersion((value) => value + 1)}>
+                  <RefreshCw size={13} aria-hidden="true" /> Reintentar derivados
+                </button>
+              </div>
+            )}
+            {model && isCategoricalTheme(terrainTheme) && !themeAvailability[terrainTheme] && !derivativeUnavailableReason && (
+              <div className="isolated-terrain-derivative-status" role="status">
+                <strong>{terrainTheme === "slope" ? "Pendiente" : "Orientación"} sin cobertura</strong>
+                <span>Esta alternativa no tiene muestras válidas para la variable. Se muestra relieve natural.</span>
+              </div>
+            )}
+
+            <div className={`isolated-terrain-legend isolated-terrain-legend--${activeTerrainTheme}`} aria-label={`Leyenda: ${activeTerrainTheme}`}>
+              {activeTerrainTheme === "natural" && (
                 <>
                   <span>Elevación relativa al rango local</span>
                   <div className="isolated-terrain-legend-bar" style={{ background: legendGradient("natural") }} />
@@ -819,7 +951,7 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
                   </div>
                 </>
               )}
-              {terrainTheme === "elevation" && (
+              {activeTerrainTheme === "elevation" && (
                 <>
                   <span>Elevación absoluta · metros</span>
                   <div className="isolated-terrain-absolute-bar-wrap">
@@ -836,14 +968,67 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
                     : "sin muestras válidas"}.</small>
                 </>
               )}
-              {terrainTheme === "hillshade" && (
+              {activeTerrainTheme === "hillshade" && (
                 <>
                   <span>Relieve sombreado</span>
                   <small>Representación monocromática con luz de escena. No hay una leyenda numérica en este modo.</small>
                 </>
               )}
+              {activeTerrainTheme === "slope" && model?.schema_version === "1.1" && (
+                <>
+                  <span>Pendiente · porcentaje</span>
+                  <div className="isolated-terrain-category-legend">
+                    {SLOPE_THEME_LEGEND.map((category) => (
+                      <div key={category.label}><i style={{ backgroundColor: category.color }} /><span>{category.label}</span></div>
+                    ))}
+                    {slopeCoverage && slopeCoverage.missing_samples > 0 && (
+                      <div><i style={{ backgroundColor: TERRAIN_THEME_NODATA_COLOR }} /><span>Sin datos</span></div>
+                    )}
+                  </div>
+                  <small>Los intervalos incluyen su límite superior; el último agrupa pendientes superiores al 60 %, incluidas las mayores del 100 %.</small>
+                </>
+              )}
+              {activeTerrainTheme === "aspect" && model?.schema_version === "1.1" && (
+                <>
+                  <span>Orientación · norte de cuadrícula</span>
+                  <div className="isolated-terrain-category-legend isolated-terrain-category-legend--aspect">
+                    {ASPECT_THEME_LEGEND.map((category) => (
+                      <div key={category.direction}><i style={{ backgroundColor: category.color }} /><span>{category.direction === "flat" ? "Plano" : `${category.direction} · ${category.label}`}</span></div>
+                    ))}
+                    {aspectCoverage && aspectCoverage.missing_samples > 0 && (
+                      <div><i style={{ backgroundColor: TERRAIN_THEME_NODATA_COLOR }} /><span>Sin datos</span></div>
+                    )}
+                  </div>
+                  <small>Ocho sectores de 45°. Norte incluye 0°/360° y las muestras próximas al cambio circular.</small>
+                </>
+              )}
               {model?.coverage.availability === "partial" && <small>Los huecos NoData no reciben color ni triangulación.</small>}
             </div>
+
+            {isCategoricalTheme(activeTerrainTheme) && model?.schema_version === "1.1" && (
+              <div className="isolated-terrain-derivative-info" aria-label="Procedencia y cobertura temática">
+                <strong>Datos de la representación</strong>
+                <dl>
+                  <div><dt>Fuente y algoritmo</dt><dd>{model.derivatives.source} · {model.derivatives.algorithm}</dd></div>
+                  <div><dt>Resolución original</dt><dd>{formatMeters(model.derivatives.source_resolution_m.east)} × {formatMeters(model.derivatives.source_resolution_m.north)}</dd></div>
+                  <div><dt>Separación de muestras</dt><dd>{formatMeters(model.grid.sample_spacing_m.east)} × {formatMeters(model.grid.sample_spacing_m.north)}</dd></div>
+                  <div><dt>Muestreo</dt><dd>{sampleMethodLabel}</dd></div>
+                  <div><dt>Cobertura temática</dt><dd>{activeTerrainTheme === "slope"
+                    ? `${slopeCoverage?.valid_samples ?? 0} / ${slopeCoverage?.total_samples ?? 0} muestras`
+                    : `${aspectCoverage?.valid_samples ?? 0} / ${aspectCoverage?.total_samples ?? 0} muestras`}</dd></div>
+                  <div><dt>Solapamiento con elevación</dt><dd>{activeTerrainTheme === "slope"
+                    ? `${categoryCoveragePercent(slopeCoverage)} % (${slopeCoverage?.valid_with_elevation_samples ?? 0} / ${slopeCoverage?.elevation_valid_samples ?? 0})`
+                    : `${categoryCoveragePercent(aspectCoverage)} % (${aspectCoverage?.valid_with_elevation_samples ?? 0} / ${aspectCoverage?.elevation_valid_samples ?? 0})`}</dd></div>
+                  {activeTerrainTheme === "aspect" && aspectCoverage && (
+                    <div><dt>Direccionales / planas</dt><dd>{aspectCoverage.directional_samples} / {aspectCoverage.flat_samples}</dd></div>
+                  )}
+                  {activeTerrainTheme === "aspect" && (
+                    <div><dt>Umbral de plano</dt><dd>≤ {numberFormat.format(model.derivatives.flat_slope_threshold_percent)} %</dd></div>
+                  )}
+                </dl>
+                <small>La cobertura se calcula sobre las muestras de elevación de la cuadrícula rectangular de visualización; no es cobertura superficial zonal ni un criterio objetivo.</small>
+              </div>
+            )}
 
             <div className="isolated-terrain-overlays" role="group" aria-label="Superposiciones">
               <span>SUPERPOSICIONES</span>
@@ -906,8 +1091,10 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
                   <summary>Procedencia y notas</summary>
                   <ul>
                     {model.warnings.map((warning) => <li key={warning}>{translateWarning(warning)}</li>)}
+                    {derivativeWarnings.map((warning) => <li key={`derivative-${warning}`}>{translateWarning(warning)}</li>)}
                     <li>Los colores son representaciones visuales y no alteran las cotas ni las estadísticas zonales.</li>
                     <li>Los límites se proyectan sobre una textura de hasta 512 × 512 píxeles; Polygon, huecos y MultiPolygon conservan su geometría local.</li>
+                    <li>Las categorías se proyectan desde los centros de la cuadrícula muestreada; no reproducen cada píxel original ni equivalen a estadísticas zonales.</li>
                   </ul>
                 </details>
               </>

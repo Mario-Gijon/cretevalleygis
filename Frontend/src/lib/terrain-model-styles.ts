@@ -1,10 +1,18 @@
 import {
   ABSOLUTE_ELEVATION_STOPS,
   ADAPTIVE_LAND_STOPS,
+  ASPECT_CLASSES,
+  ASPECT_FLAT_COLOR,
+  SLOPE_CLASSES,
 } from "@/lib/exploration-terrain";
+import type { TerrainModelDerivatives } from "@/lib/terrain-model";
 import type { TerrainGrid } from "@/lib/terrain-model-mesh";
 
-export type TerrainModelTheme = "natural" | "elevation" | "hillshade";
+export type TerrainModelBaseTheme = "natural" | "elevation" | "hillshade";
+export type TerrainModelTheme = TerrainModelBaseTheme | "slope" | "aspect";
+
+export const TERRAIN_THEME_NODATA_COLOR = "#687783";
+export const TERRAIN_ASPECT_FLAT_COLOR = ASPECT_FLAT_COLOR;
 
 export type TerrainColorStop = { valueM: number; color: string };
 export type RelativeColorStop = { position: number; color: string };
@@ -73,7 +81,7 @@ function interpolateRelativePalette(position: number): string {
 
 export function terrainModelColorForElevation(
   elevationM: number,
-  theme: TerrainModelTheme,
+  theme: TerrainModelBaseTheme,
   minimumElevationM: number,
   maximumElevationM: number,
 ): string {
@@ -99,7 +107,7 @@ function srgbChannelToLinear(channel: number): number {
  */
 export function buildTerrainVertexColors(
   grid: TerrainGrid,
-  theme: TerrainModelTheme,
+  theme: TerrainModelBaseTheme,
   minimumElevationM: number,
   maximumElevationM: number,
 ): Float32Array {
@@ -118,7 +126,7 @@ export function buildTerrainVertexColors(
   return colors;
 }
 
-export function terrainModelLegendStops(theme: Exclude<TerrainModelTheme, "hillshade">): Array<{ position: number; color: string }> {
+export function terrainModelLegendStops(theme: Exclude<TerrainModelBaseTheme, "hillshade">): Array<{ position: number; color: string }> {
   if (theme === "natural") {
     return NATURAL_RELIEF_STOPS.map((stop) => ({ position: stop.position * 100, color: stop.color }));
   }
@@ -128,3 +136,74 @@ export function terrainModelLegendStops(theme: Exclude<TerrainModelTheme, "hills
     color: stop.color,
   }));
 }
+
+export function classifySlope(value: number | null): { color: string; label: string } | null {
+  if (value === null || !Number.isFinite(value) || value < 0) return null;
+  const category = SLOPE_CLASSES.find((entry) => value <= entry.maximumPercent);
+  return category ? { color: category.color, label: category.label } : null;
+}
+
+export function classifyAspect(value: number | null, flat: boolean): { color: string; label: string } | null {
+  if (flat) return value === null ? { color: ASPECT_FLAT_COLOR, label: "Plano" } : null;
+  if (value === null || !Number.isFinite(value) || value < 0 || value > 360) return null;
+  if (value <= 22.5 || value > 337.5) {
+    const north = ASPECT_CLASSES[0];
+    return { color: north.color, label: north.label };
+  }
+  const boundaries = [67.5, 112.5, 157.5, 202.5, 247.5, 292.5, 337.5];
+  const index = boundaries.findIndex((boundary) => value <= boundary) + 1;
+  const category = ASPECT_CLASSES[index];
+  return { color: category.color, label: category.label };
+}
+
+export function buildCategoricalColors(
+  theme: "slope" | "aspect",
+  derivatives: TerrainModelDerivatives,
+): string[] {
+  const { rows, columns } = derivatives.slope.values_percent.reduce((shape, row) => ({
+    rows: shape.rows + 1,
+    columns: row.length,
+  }), { rows: 0, columns: 0 });
+  const colors: string[] = [];
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const category = theme === "slope"
+        ? classifySlope(derivatives.slope.values_percent[row][column])
+        : classifyAspect(derivatives.aspect.values_degrees[row][column], derivatives.aspect.flat_mask[row][column]);
+      colors.push(category?.color ?? TERRAIN_THEME_NODATA_COLOR);
+    }
+  }
+  return colors;
+}
+
+export function categoricalColorsToRgba(colors: string[]): Uint8ClampedArray {
+  const pixels = new Uint8ClampedArray(colors.length * 4);
+  colors.forEach((color, index) => {
+    const channels = hexChannels(color);
+    const offset = index * 4;
+    pixels[offset] = channels[0];
+    pixels[offset + 1] = channels[1];
+    pixels[offset + 2] = channels[2];
+    pixels[offset + 3] = 255;
+  });
+  return pixels;
+}
+
+/** UVs sample the center of each texel; the CanvasTexture's Y flip aligns north-up row 0. */
+export function buildCategoricalSampleUvs(columns: number, rows: number): Float32Array {
+  const uvs = new Float32Array(columns * rows * 2);
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const offset = (row * columns + column) * 2;
+      uvs[offset] = (column + 0.5) / columns;
+      uvs[offset + 1] = 1 - (row + 0.5) / rows;
+    }
+  }
+  return uvs;
+}
+
+export const SLOPE_THEME_LEGEND = SLOPE_CLASSES.map(({ label, color }) => ({ label, color }));
+export const ASPECT_THEME_LEGEND = [
+  ...ASPECT_CLASSES.map(({ direction, label, color }) => ({ direction, label, color })),
+  { direction: "flat", label: "Plano", color: ASPECT_FLAT_COLOR },
+];

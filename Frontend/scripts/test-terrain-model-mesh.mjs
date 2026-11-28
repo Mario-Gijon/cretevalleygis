@@ -18,6 +18,12 @@ const stylesJavascript = ts.transpileModule(stylesSource, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText.replace('"@/lib/exploration-terrain"', JSON.stringify(explorationUrl));
 const stylesModule = await import(`data:text/javascript;base64,${Buffer.from(stylesJavascript).toString("base64")}`);
+const terrainModelSource = await readFile(new URL("../src/lib/terrain-model.ts", import.meta.url), "utf8");
+const terrainModelJavascript = ts.transpileModule(terrainModelSource, {
+  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+}).outputText;
+const terrainModelModule = await import(`data:text/javascript;base64,${Buffer.from(terrainModelJavascript).toString("base64")}`);
+const isolatedViewSource = await readFile(new URL("../src/components/IsolatedTerrainView.tsx", import.meta.url), "utf8");
 const threeTextureSource = await readFile(new URL("../node_modules/three/src/textures/Texture.js", import.meta.url), "utf8");
 const threeCanvasTextureSource = await readFile(new URL("../node_modules/three/src/textures/CanvasTexture.js", import.meta.url), "utf8");
 
@@ -351,6 +357,202 @@ test("NoData vertices have no thematic color and remain excluded from valid tria
   assert.deepEqual(Array.from(colors.slice(3, 6)), [0, 0, 0]);
   assert.ok(!Array.from(data.indices).includes(1));
   assert.equal(data.triangleCount, 1);
+});
+
+function terrainModelFixture(schemaVersion = "1.0") {
+  const model = {
+    schema_version: schemaVersion,
+    analysis_id: "a1b2c3d4e5f60708",
+    source: "Copernicus DEM GLO-30 Public",
+    model_type: "DSM",
+    horizontal_crs: "EPSG:32635",
+    vertical_reference: "EGM2008",
+    units: { horizontal: "m", vertical: "m" },
+    source_resolution_m: { east: 10, north: 10 },
+    source_nodata: -9999,
+    extent_projected_m: { west: 0, south: 0, east: 20, north: 20 },
+    local_origin: { projected_m: { east: 0, north: 0 }, local_m: { east: 0, north: 0 }, definition: "fixture" },
+    geometry_local_m: { type: "Polygon", coordinates: [[[2, 2], [18, 2], [18, 18], [2, 18], [2, 2]]] },
+    grid: {
+      columns: 2, rows: 2,
+      first_sample_local_m: { east: 5, north: 15 },
+      sample_spacing_m: { east: 10, north: 10 },
+      column_order: "west_to_east", row_order: "north_to_south",
+      position_convention: "Values are located at output-cell centres.",
+      sampling_method: "native_pixel_centres",
+      values_m: [[100, 110], [120, 130]],
+    },
+    coverage: { availability: "available", valid_samples: 4, missing_samples: 0, valid_sample_fraction: 1 },
+    sampled_elevation_range_m: { minimum: 100, maximum: 130 },
+    context: { requested_margin_m: 0, was_clipped_to_coverage: false },
+    warnings: [],
+  };
+  if (schemaVersion === "1.0") return model;
+  return {
+    ...model,
+    derivatives: {
+      source: "Copernicus DEM GLO-30 Public",
+      algorithm: "Horn",
+      derivative_version: "horn-terrain-derivatives-1",
+      analysis_manifest_version: "2",
+      source_elevation_sha256: "a".repeat(64),
+      source_resolution_m: { east: 10, north: 10 },
+      source_horizontal_crs: "EPSG:32635",
+      source_horizontal_units: "m",
+      target_grid: "grid",
+      sampling_method: "native_pixel_centres",
+      resampling_policy: "nearest-neighbour samples at common cell centres",
+      slope: {
+        unit: "percent",
+        values_percent: [[0, 5], [15, null]],
+        coverage: {
+          availability: "partial", total_samples: 4, valid_samples: 3, missing_samples: 1,
+          valid_sample_fraction: 0.75, invalid_domain_samples: 0,
+          valid_with_elevation_samples: 3, valid_with_elevation_fraction: 0.75,
+          elevation_valid_samples: 4, fraction_of_elevation_samples_covered: 0.75,
+        },
+      },
+      aspect: {
+        unit: "degrees", reference: "grid_north",
+        values_degrees: [[359, 0], [1, null]], flat_mask: [[false, false], [false, true]],
+        coverage: {
+          availability: "available", total_samples: 4, valid_samples: 4, missing_samples: 0,
+          valid_sample_fraction: 1, invalid_domain_samples: 0,
+          valid_with_elevation_samples: 4, valid_with_elevation_fraction: 1,
+          elevation_valid_samples: 4, fraction_of_elevation_samples_covered: 1,
+          directional_samples: 3, flat_samples: 1,
+        },
+      },
+      flat_slope_threshold_percent: 0.1,
+      warnings: ["The numeric rasters retain an older style-revision tag than the analysis manifest; their Horn algorithm, source checksum, units and grid were validated and no raster was regenerated."],
+    },
+  };
+}
+
+function throwsInvalidResponse(action) {
+  assert.throws(action, (error) => error instanceof terrainModelModule.TerrainModelRequestError && error.code === "invalid_response");
+}
+
+test("terrain model validator accepts shared 1.0 elevation and aligned 1.1 derivatives", () => {
+  assert.equal(terrainModelModule.validateTerrainModel(terrainModelFixture("1.0"), "a1b2c3d4e5f60708").schema_version, "1.0");
+  const extended = terrainModelModule.validateTerrainModel(terrainModelFixture("1.1"), "a1b2c3d4e5f60708");
+  assert.equal(extended.schema_version, "1.1");
+  assert.equal(extended.derivatives.sampling_method, "native_pixel_centres");
+  assert.equal(extended.derivatives.warnings.length, 1, "style revision difference is preserved as a warning");
+  assert.equal(extended.derivatives.slope.values_percent[1][1], null, "null stays NoData, not zero");
+});
+
+test("terrain model validation rejects derivative dimensions and inconsistent coverage", () => {
+  const wrongDimensions = terrainModelFixture("1.1");
+  wrongDimensions.derivatives.slope.values_percent.pop();
+  throwsInvalidResponse(() => terrainModelModule.validateTerrainModel(wrongDimensions, "a1b2c3d4e5f60708"));
+  const wrongCoverage = terrainModelFixture("1.1");
+  wrongCoverage.derivatives.slope.coverage.valid_samples = 4;
+  wrongCoverage.derivatives.slope.coverage.missing_samples = 0;
+  wrongCoverage.derivatives.slope.coverage.valid_sample_fraction = 1;
+  throwsInvalidResponse(() => terrainModelModule.validateTerrainModel(wrongCoverage, "a1b2c3d4e5f60708"));
+});
+
+test("a valid direction and a flat-mask sample are mutually exclusive", () => {
+  const fixture = terrainModelFixture("1.1");
+  fixture.derivatives.aspect.flat_mask[0][0] = true;
+  fixture.derivatives.aspect.coverage.flat_samples = 2;
+  fixture.derivatives.aspect.coverage.directional_samples = 3;
+  throwsInvalidResponse(() => terrainModelModule.validateTerrainModel(fixture, "a1b2c3d4e5f60708"));
+});
+
+test("derivative validator rejects negative slopes, out-of-range directions, and non-boolean flat masks", () => {
+  const negativeSlope = terrainModelFixture("1.1");
+  negativeSlope.derivatives.slope.values_percent[0][0] = -0.01;
+  throwsInvalidResponse(() => terrainModelModule.validateTerrainModel(negativeSlope, "a1b2c3d4e5f60708"));
+  const invalidAspect = terrainModelFixture("1.1");
+  invalidAspect.derivatives.aspect.values_degrees[0][0] = 360.01;
+  throwsInvalidResponse(() => terrainModelModule.validateTerrainModel(invalidAspect, "a1b2c3d4e5f60708"));
+  const invalidMask = terrainModelFixture("1.1");
+  invalidMask.derivatives.aspect.flat_mask[0][0] = 0;
+  throwsInvalidResponse(() => terrainModelModule.validateTerrainModel(invalidMask, "a1b2c3d4e5f60708"));
+});
+
+test("slope classification includes exact upper boundaries and preserves values above 100 percent", () => {
+  const expected = [
+    [0, "#4f9f83"], [5, "#4f9f83"], [5.0001, "#a8c96f"], [15, "#a8c96f"],
+    [15.001, "#f0df73"], [30, "#f0df73"], [30.001, "#ed9c58"], [60, "#ed9c58"],
+    [60.001, "#c84a43"], [100, "#c84a43"], [150, "#c84a43"],
+  ];
+  for (const [value, color] of expected) assert.equal(stylesModule.classifySlope(value).color, color);
+  assert.equal(stylesModule.classifySlope(null), null);
+});
+
+test("aspect classification matches zonal north-wrap and inclusive sector boundaries", () => {
+  const samples = [
+    [359, 0], [0, 0], [1, 0], [360, 0], [22.5, 0], [22.5001, 1],
+    [67.5, 1], [67.5001, 2], [112.5, 2], [112.5001, 3], [157.5, 3], [157.5001, 4],
+    [202.5, 4], [202.5001, 5], [247.5, 5], [247.5001, 6], [292.5, 6], [292.5001, 7],
+    [337.5, 7], [337.5001, 0],
+  ];
+  for (const [value, category] of samples) {
+    assert.equal(stylesModule.classifyAspect(value, false).color, stylesModule.ASPECT_THEME_LEGEND[category].color, `aspect ${value}°`);
+  }
+  assert.deepEqual(stylesModule.classifyAspect(null, true), { color: "#c9c9c4", label: "Plano" });
+  assert.equal(stylesModule.classifyAspect(null, false), null, "directional NoData stays distinct from flat and north");
+  assert.equal(stylesModule.classifyAspect(0, true), null, "flat cells cannot carry a valid direction");
+});
+
+test("categorical sample UVs address pixel centers with north-up rows and west-east columns", () => {
+  const uvs = stylesModule.buildCategoricalSampleUvs(3, 2);
+  const expected = [1 / 6, 0.75, 0.5, 0.75, 5 / 6, 0.75, 1 / 6, 0.25, 0.5, 0.25, 5 / 6, 0.25];
+  assert.ok(Array.from(uvs).every((value, index) => Math.abs(value - expected[index]) < 1e-7));
+  assert.match(isolatedViewSource, /texture\.channel\s*=\s*1/);
+  assert.match(isolatedViewSource, /texture\.minFilter\s*=\s*THREE\.NearestFilter/);
+  assert.match(isolatedViewSource, /texture\.magFilter\s*=\s*THREE\.NearestFilter/);
+  assert.match(isolatedViewSource, /texture\.generateMipmaps\s*=\s*false/);
+});
+
+test("categorical colors remain exact palette colors and give thematic NoData a neutral swatch", () => {
+  const fixture = terrainModelFixture("1.1");
+  const validated = terrainModelModule.validateTerrainModel(fixture, "a1b2c3d4e5f60708");
+  const slopeColors = stylesModule.buildCategoricalColors("slope", validated.derivatives);
+  assert.deepEqual(slopeColors, ["#4f9f83", "#4f9f83", "#a8c96f", stylesModule.TERRAIN_THEME_NODATA_COLOR]);
+  const aspectColors = stylesModule.buildCategoricalColors("aspect", validated.derivatives);
+  assert.deepEqual(aspectColors, ["#f2d34f", "#f2d34f", "#f2d34f", "#c9c9c4"]);
+  const rgba = stylesModule.categoricalColorsToRgba(slopeColors);
+  assert.equal(rgba.length, slopeColors.length * 4);
+  assert.equal(rgba[3], 255);
+  assert.equal(stylesModule.TERRAIN_THEME_NODATA_COLOR, "#687783");
+});
+
+test("a fully absent thematic grid validates as NoData without hiding the elevation surface", () => {
+  const fixture = terrainModelFixture("1.1");
+  fixture.derivatives.slope.values_percent = [[null, null], [null, null]];
+  fixture.derivatives.slope.coverage = {
+    availability: "no_data", total_samples: 4, valid_samples: 0, missing_samples: 4,
+    valid_sample_fraction: 0, invalid_domain_samples: 0, valid_with_elevation_samples: 0,
+    valid_with_elevation_fraction: 0, elevation_valid_samples: 4, fraction_of_elevation_samples_covered: 0,
+  };
+  const validated = terrainModelModule.validateTerrainModel(fixture, "a1b2c3d4e5f60708");
+  assert.equal(validated.grid.values_m[0][0], 100);
+  assert.equal(validated.derivatives.slope.coverage.availability, "no_data");
+  assert.equal(validated.derivatives.aspect.coverage.availability, "available", "an available aspect variable is retained independently");
+  assert.ok(stylesModule.buildCategoricalColors("slope", validated.derivatives).every((color) => color === stylesModule.TERRAIN_THEME_NODATA_COLOR));
+});
+
+test("categorical styling does not mutate mesh positions, triangulation, or derivative samples", () => {
+  const fixture = terrainModelModule.validateTerrainModel(terrainModelFixture("1.1"), "a1b2c3d4e5f60708");
+  const surface = meshModule.buildTerrainMesh(fixture.grid);
+  const positions = Array.from(surface.positions);
+  const indices = Array.from(surface.indices);
+  const slopeAtAllExaggerations = [0.5, 1, 3].map(() => stylesModule.buildCategoricalColors("slope", fixture.derivatives));
+  assert.deepEqual(slopeAtAllExaggerations[0], slopeAtAllExaggerations[1]);
+  assert.deepEqual(slopeAtAllExaggerations[1], slopeAtAllExaggerations[2]);
+  assert.deepEqual(Array.from(surface.positions), positions);
+  assert.deepEqual(Array.from(surface.indices), indices);
+  assert.deepEqual(fixture.derivatives.slope.values_percent, [[0, 5], [15, null]]);
+});
+
+test("derivative fallback is restricted to explicit derivative incompatibility or absence", () => {
+  assert.equal(terrainModelModule.canFallbackToElevationOnly(new terrainModelModule.TerrainModelRequestError("missing", "slope_raster_unavailable", 404)), true);
+  assert.equal(terrainModelModule.canFallbackToElevationOnly(new terrainModelModule.TerrainModelRequestError("missing", "analysis_in_progress", 409)), false);
+  assert.equal(terrainModelModule.canFallbackToElevationOnly(new terrainModelModule.TerrainModelRequestError("bad", "invalid_response", 502)), false);
 });
 
 test("triangular overlay contains each actual valid triangle edge once and does not mutate the mesh", () => {
