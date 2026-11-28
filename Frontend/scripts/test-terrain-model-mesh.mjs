@@ -23,6 +23,11 @@ const terrainModelJavascript = ts.transpileModule(terrainModelSource, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const terrainModelModule = await import(`data:text/javascript;base64,${Buffer.from(terrainModelJavascript).toString("base64")}`);
+const contoursSource = await readFile(new URL("../src/lib/terrain-model-contours.ts", import.meta.url), "utf8");
+const contoursJavascript = ts.transpileModule(contoursSource, {
+  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+}).outputText;
+const contoursModule = await import(`data:text/javascript;base64,${Buffer.from(contoursJavascript).toString("base64")}`);
 const isolatedViewSource = await readFile(new URL("../src/components/IsolatedTerrainView.tsx", import.meta.url), "utf8");
 const threeTextureSource = await readFile(new URL("../node_modules/three/src/textures/Texture.js", import.meta.url), "utf8");
 const threeCanvasTextureSource = await readFile(new URL("../node_modules/three/src/textures/CanvasTexture.js", import.meta.url), "utf8");
@@ -577,6 +582,165 @@ test("triangular overlay contains each actual valid triangle edge once and does 
   assert.deepEqual(actualEdges, expectedEdges);
   assert.deepEqual(Array.from(data.positions), originalPositions);
   assert.deepEqual(Array.from(data.indices), originalIndices);
+});
+
+function contourFixture(values, intervalM, east = 10, north = 10) {
+  const input = grid(values, east, north);
+  const surface = meshModule.buildTerrainMesh(input);
+  return { input, surface, contours: contoursModule.buildTerrainContours(input, surface, intervalM) };
+}
+
+function contourSegments(positions) {
+  const segments = [];
+  for (let offset = 0; offset + 5 < positions.length; offset += 6) {
+    segments.push(Array.from(positions.slice(offset, offset + 6)));
+  }
+  return segments;
+}
+
+test("marching triangles place an east-west gradient contour at its known absolute elevation", () => {
+  const { contours, surface } = contourFixture([[0, 20], [0, 20]], 10);
+  assert.equal(contours.status, "ready");
+  assert.deepEqual(contours.levels, [0, 10, 20]);
+  const levelTen = contourSegments(contours.minorPositions)
+    .filter((segment) => Math.abs(segment[1] - (10 - surface.referenceElevationM)) < 1e-6);
+  assert.equal(levelTen.length, 2, "the isoline is split only at the actual mesh diagonal");
+  for (const segment of levelTen) {
+    for (const point of [[segment[0], segment[1], segment[2]], [segment[3], segment[4], segment[5]]]) {
+      assert.ok(Math.abs(point[0]) < 1e-6, "the known east coordinate is centered");
+      assert.ok(Math.abs(point[1] - (10 - surface.referenceElevationM)) < 1e-6);
+    }
+  }
+});
+
+test("north-south gradient contours follow north-up local coordinates", () => {
+  const { contours, surface } = contourFixture([[30, 30], [10, 10]], 20);
+  const segments = contourSegments(contours.minorPositions)
+    .filter((segment) => Math.abs(segment[1] - (20 - surface.referenceElevationM)) < 1e-6);
+  assert.equal(segments.length, 2, "the plane contour is split at the triangulation diagonal");
+  assert.ok(segments.every((segment) => Math.abs(segment[2]) < 1e-6 && Math.abs(segment[5]) < 1e-6));
+});
+
+test("negative elevations, zero, and exact extrema use absolute multiples from zero", () => {
+  const { contours } = contourFixture([[-20, 20], [-20, 20]], 20);
+  assert.deepEqual(contours.levels, [-20, 0, 20]);
+  const zeroSegments = [...contourSegments(contours.minorPositions), ...contourSegments(contours.majorPositions)]
+    .filter((segment) => Math.abs(segment[1]) < 1e-6 && Math.abs(segment[4]) < 1e-6);
+  assert.ok(zeroSegments.length > 0, "the zero contour crosses the terrain");
+});
+
+test("flat triangles at a selected contour elevation produce no decorative lines", () => {
+  const { contours } = contourFixture([[100, 100, 100], [100, 100, 100]], 20);
+  assert.equal(contours.status, "ready");
+  assert.equal(contours.segmentCount, 0);
+  assert.equal(contours.majorPositions.length, 0);
+});
+
+test("an exact-level vertex connects adjacent triangle segments without zero-length pieces", () => {
+  const { contours } = contourFixture([[0, 10, 20], [0, 10, 20]], 10);
+  const segments = [...contourSegments(contours.minorPositions), ...contourSegments(contours.majorPositions)];
+  assert.ok(segments.length > 0);
+  assert.ok(segments.every((segment) => Math.hypot(segment[3] - segment[0], segment[5] - segment[2]) > 1e-6));
+  const normalized = segments.map((segment) => segment.map((coordinate) => coordinate.toFixed(5)).join(","));
+  assert.equal(new Set(normalized).size, normalized.length, "segments are not emitted twice");
+});
+
+test("a grid edge exactly on a contour is emitted once despite its two incident triangles", () => {
+  const { contours } = contourFixture([[10, 0], [0, 10]], 10);
+  const segments = [...contourSegments(contours.minorPositions), ...contourSegments(contours.majorPositions)];
+  const exactTenMetreDiagonal = segments.filter((segment) => Math.abs(segment[1] - 5) < 1e-6 && Math.abs(segment[4] - 5) < 1e-6);
+  assert.ok(segments.length > 0);
+  assert.equal(new Set(segments.map((segment) => segment.map((coordinate) => coordinate.toFixed(5)).join(","))).size, segments.length);
+  assert.equal(exactTenMetreDiagonal.length, 1, "the shared diagonal is deduplicated");
+});
+
+test("NoData holes are not bridged by contour segments", () => {
+  const { input, surface, contours } = contourFixture([[0, 10, 20], [10, null, 30], [20, 30, 40]], 20);
+  assert.ok(surface.triangleCount > 0);
+  const centerEast = input.first_sample_local_m.east + input.sample_spacing_m.east;
+  const centerNorth = input.first_sample_local_m.north - input.sample_spacing_m.north;
+  for (const segment of [...contourSegments(contours.minorPositions), ...contourSegments(contours.majorPositions)]) {
+    const midpointEast = (segment[0] + segment[3]) / 2 + centerEast;
+    const midpointNorth = -(segment[2] + segment[5]) / 2 + centerNorth;
+    assert.ok(!(Math.abs(midpointEast - centerEast) < 1 && Math.abs(midpointNorth - centerNorth) < 1));
+  }
+});
+
+test("disconnected valid regions keep separate contour pieces", () => {
+  const { contours } = contourFixture([
+    [0, 10, null, 0, 10],
+    [10, 20, null, 10, 20],
+    [20, 30, null, 20, 30],
+  ], 10);
+  const segments = [...contourSegments(contours.minorPositions), ...contourSegments(contours.majorPositions)];
+  assert.ok(segments.length > 0);
+  assert.ok(segments.every((segment) => Math.abs((segment[0] + segment[3]) / 2) > 5));
+});
+
+test("rectangular anisotropic grids interpolate coordinates within the valid sample frame", () => {
+  const { input, contours } = contourFixture([[0, 20, 40], [10, 30, 50]], 20, 14, 23);
+  assert.ok(contours.segmentCount > 0);
+  const eastHalfSpan = input.sample_spacing_m.east;
+  const northHalfSpan = input.sample_spacing_m.north / 2;
+  for (const segment of [...contourSegments(contours.minorPositions), ...contourSegments(contours.majorPositions)]) {
+    assert.ok(segment.every(Number.isFinite));
+    assert.ok(Math.abs(segment[0]) <= eastHalfSpan && Math.abs(segment[3]) <= eastHalfSpan);
+    assert.ok(Math.abs(segment[2]) <= northHalfSpan && Math.abs(segment[5]) <= northHalfSpan);
+  }
+});
+
+test("automatic interval chooses a readable listed value and manual levels remain absolute multiples", () => {
+  const interval = contoursModule.selectAutomaticContourInterval(1077.1, 1257.6);
+  assert.ok([5, 10, 20, 50, 100, 200].includes(interval));
+  assert.ok(contoursModule.terrainContourLevels(1077.1, 1257.6, interval).length <= 18);
+  assert.deepEqual(contoursModule.terrainContourLevels(-23, 44, 20), [-20, 0, 20, 40]);
+});
+
+test("master contours occur on every fifth absolute interval, including negative levels", () => {
+  const { contours } = contourFixture([[-120, 120], [-120, 120]], 20);
+  assert.deepEqual(contours.levels, [-120, -100, -80, -60, -40, -20, 0, 20, 40, 60, 80, 100, 120]);
+  assert.equal(contours.majorLevelCount, 3);
+  assert.ok(contours.majorSegmentCount > 0);
+});
+
+test("excessive level counts and segment counts are reported without partial geometry", () => {
+  const input = grid([[0, 300], [0, 300]]);
+  const mesh = meshModule.buildTerrainMesh(input);
+  assert.equal(contoursModule.buildTerrainContours(input, mesh, 1).status, "level_limit");
+  const size = 46;
+  const alternating = grid(Array.from({ length: size }, (_, row) => Array.from({ length: size }, (_, column) => (row + column) % 2 ? 100 : 0)));
+  const denseMesh = meshModule.buildTerrainMesh(alternating);
+  const limited = contoursModule.buildTerrainContours(alternating, denseMesh, 1);
+  assert.equal(limited.status, "segment_limit");
+  assert.equal(limited.segmentCount, 0);
+  assert.equal(limited.minorPositions.length + limited.majorPositions.length, 0);
+});
+
+test("a full 256 by 256 synthetic hill stays within contour allocation limits", () => {
+  const size = 256;
+  const largeGrid = grid(Array.from({ length: size }, (_, row) => Array.from({ length: size }, (_, column) => (
+    850 + column * 0.28 + row * 0.19 + Math.sin(column / 13) * 9 + Math.cos(row / 17) * 7
+  ))));
+  const largeMesh = meshModule.buildTerrainMesh(largeGrid);
+  const startedAt = performance.now();
+  const contours = contoursModule.buildTerrainContours(largeGrid, largeMesh, 20);
+  const elapsedMs = performance.now() - startedAt;
+  assert.equal(largeMesh.triangleCount, (size - 1) * (size - 1) * 2);
+  assert.equal(contours.status, "ready");
+  assert.ok(contours.segmentCount <= contoursModule.TERRAIN_CONTOUR_MAX_SEGMENTS);
+  console.log(`256×256 contour generation: ${elapsedMs.toFixed(1)} ms, ${contours.segmentCount.toLocaleString("es-ES")} segments`);
+});
+
+test("contours are independent of exaggeration and do not mutate the source mesh", () => {
+  const input = grid([[-10, 0, 10], [20, 30, 40], [50, 60, 70]], 12, 30);
+  const mesh = meshModule.buildTerrainMesh(input);
+  const sourcePositions = Array.from(mesh.positions);
+  const sourceIndices = Array.from(mesh.indices);
+  const results = [0.5, 1, 3].map(() => contoursModule.buildTerrainContours(input, mesh, 10));
+  assert.deepEqual(Array.from(results[0].minorPositions), Array.from(results[1].minorPositions));
+  assert.deepEqual(Array.from(results[1].majorPositions), Array.from(results[2].majorPositions));
+  assert.deepEqual(Array.from(mesh.positions), sourcePositions);
+  assert.deepEqual(Array.from(mesh.indices), sourceIndices);
 });
 
 console.log(`terrain mesh checks: ${cases.length} passed`);

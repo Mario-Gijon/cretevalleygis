@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { AlertCircle, Compass, LoaderCircle, Mountain, RefreshCw, RotateCcw, X } from "lucide-react";
+import { AlertCircle, ArrowUp, Compass, LoaderCircle, Mountain, RefreshCw, RotateCcw, X } from "lucide-react";
 import { formatArea } from "@/lib/geometry-metrics";
 import {
   buildTerrainWireframeIndices,
@@ -27,6 +27,11 @@ import {
   type TerrainModelTheme,
 } from "@/lib/terrain-model-styles";
 import { observeTerrainModel, TerrainModelRequestError, type TerrainModelResponse } from "@/lib/terrain-model";
+import {
+  buildTerrainContours,
+  selectAutomaticContourInterval,
+  type TerrainContourBuildResult,
+} from "@/lib/terrain-model-contours";
 import "@/components/IsolatedTerrainView.css";
 
 type IsolatedTerrainViewProps = {
@@ -44,12 +49,24 @@ type LoadState = { status: "loading" } | {
 } | { status: "error"; message: string };
 type ModelShape = "surface" | "volume";
 type BoundaryMode = "fill" | "outline" | "hidden";
+type ContourCache = {
+  model: TerrainModelResponse;
+  meshData: TerrainMeshData;
+  intervalM: number;
+  result: TerrainContourBuildResult;
+};
 
 const MODEL_SHAPE_STORAGE_KEY = "cv-gis-isolated-terrain-shape";
 const MODEL_THEME_STORAGE_KEY = "cv-gis-isolated-terrain-theme";
 const MODEL_BOUNDARY_STORAGE_KEY = "cv-gis-isolated-terrain-boundary";
 const MODEL_WIREFRAME_STORAGE_KEY = "cv-gis-isolated-terrain-wireframe";
 const MODEL_EXAGGERATION_STORAGE_KEY = "cv-gis-isolated-terrain-exaggeration";
+const MODEL_CONTOURS_STORAGE_KEY = "cv-gis-isolated-terrain-contours";
+const MODEL_CONTOUR_INTERVAL_STORAGE_KEY = "cv-gis-isolated-terrain-contour-interval";
+const MODEL_CONTOUR_MAJORS_STORAGE_KEY = "cv-gis-isolated-terrain-contour-majors";
+const MODEL_CONTOUR_OPACITY_STORAGE_KEY = "cv-gis-isolated-terrain-contour-opacity";
+const CONTOUR_INTERVAL_CHOICES = ["auto", "5", "10", "20", "50", "100", "200"] as const;
+type ContourIntervalChoice = (typeof CONTOUR_INTERVAL_CHOICES)[number];
 
 function readChoice<T extends string>(key: string, choices: readonly T[], fallback: T): T {
   try {
@@ -76,6 +93,24 @@ function readSessionExaggeration(): number {
   } catch {
     return 1;
   }
+}
+
+function readSessionRatio(key: string, fallback: number, minimum: number, maximum: number): number {
+  try {
+    const stored = Number(window.sessionStorage.getItem(key));
+    return Number.isFinite(stored) && stored >= minimum && stored <= maximum ? stored : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function createContourGeometry(positions: Float32Array, verticalOffsetM: number): THREE.BufferGeometry {
+  const offsetPositions = new Float32Array(positions);
+  for (let index = 1; index < offsetPositions.length; index += 3) offsetPositions[index] += verticalOffsetM;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(offsetPositions, 3));
+  geometry.computeBoundingSphere();
+  return geometry;
 }
 
 function readModelShape(): ModelShape {
@@ -278,6 +313,11 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
   const [terrainTheme, setTerrainTheme] = useState<TerrainModelTheme>(() => readChoice(MODEL_THEME_STORAGE_KEY, ["natural", "elevation", "hillshade", "slope", "aspect"], "natural"));
   const [boundaryMode, setBoundaryMode] = useState<BoundaryMode>(() => readChoice(MODEL_BOUNDARY_STORAGE_KEY, ["fill", "outline", "hidden"], "fill"));
   const [showTriangularMesh, setShowTriangularMesh] = useState(() => readSessionBoolean(MODEL_WIREFRAME_STORAGE_KEY, false));
+  const [showContours, setShowContours] = useState(() => readSessionBoolean(MODEL_CONTOURS_STORAGE_KEY, false));
+  const [contourIntervalChoice, setContourIntervalChoice] = useState<ContourIntervalChoice>(() => readChoice(MODEL_CONTOUR_INTERVAL_STORAGE_KEY, CONTOUR_INTERVAL_CHOICES, "auto"));
+  const [emphasizeMajorContours, setEmphasizeMajorContours] = useState(() => readSessionBoolean(MODEL_CONTOUR_MAJORS_STORAGE_KEY, true));
+  const [contourOpacity, setContourOpacity] = useState(() => readSessionRatio(MODEL_CONTOUR_OPACITY_STORAGE_KEY, 0.78, 0.2, 1));
+  const [contourSummary, setContourSummary] = useState<TerrainContourBuildResult | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const canvasHostRef = useRef<HTMLDivElement>(null);
   const northIndicatorRef = useRef<HTMLSpanElement>(null);
@@ -291,11 +331,17 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
   const supportWallMaterialRef = useRef<THREE.MeshStandardMaterial | null>(null);
   const supportBaseMaterialRef = useRef<THREE.MeshStandardMaterial | null>(null);
   const wireframeMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
+  const contourMinorMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
+  const contourMajorMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
   const boundaryTextureRef = useRef<THREE.CanvasTexture | null>(null);
   const thematicTexturesRef = useRef<Partial<Record<"slope" | "aspect", THREE.CanvasTexture>>>({});
   const boundaryCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const boundaryMeshRef = useRef<THREE.Mesh | null>(null);
   const wireframeRef = useRef<THREE.LineSegments | null>(null);
+  const contourMinorRef = useRef<THREE.LineSegments | null>(null);
+  const contourMajorRef = useRef<THREE.LineSegments | null>(null);
+  const contourCacheRef = useRef<ContourCache | null>(null);
+  const contourAttachedRef = useRef<{ model: TerrainModelResponse; meshData: TerrainMeshData; intervalM: number; rendererVersion: number } | null>(null);
   const surfaceColorAttributeRef = useRef<THREE.BufferAttribute | null>(null);
   const modelShapeRef = useRef(modelShape);
   const terrainThemeRef = useRef(terrainTheme);
@@ -305,6 +351,7 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
   const ambientLightRef = useRef<THREE.HemisphereLight | null>(null);
   const directionalLightRef = useRef<THREE.DirectionalLight | null>(null);
   const resetViewRef = useRef<(() => void) | null>(null);
+  const topViewRef = useRef<(() => void) | null>(null);
   const themeRef = useRef(theme);
   const frameRequestRef = useRef<number | null>(null);
   const meshData = useMemo(
@@ -556,7 +603,27 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
       const nextWidth = Math.max(1, host.clientWidth);
       const nextHeight = Math.max(1, host.clientHeight);
       const frame = cameraFrame(modelShapeRef.current, exaggerationRef.current, nextWidth, nextHeight);
+      camera.up.set(0, 1, 0);
       camera.position.copy(frame.position);
+      controls.target.copy(frame.target);
+      controls.minDistance = Math.max(0.5, frame.radius * 0.08);
+      controls.maxDistance = frame.distance * 7;
+      controls.update();
+      camera.lookAt(frame.target);
+      updateNorth();
+      render();
+    };
+    const topView = () => {
+      const nextWidth = Math.max(1, host.clientWidth);
+      const nextHeight = Math.max(1, host.clientHeight);
+      const frame = cameraFrame(modelShapeRef.current, exaggerationRef.current, nextWidth, nextHeight);
+      const horizontalRadius = Math.max(spanX, spanZ) / 2;
+      const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+      const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * Math.max(0.1, nextWidth / nextHeight));
+      const limitingHalfFov = Math.min(verticalFov, horizontalFov) / 2;
+      const overheadDistance = Math.max(frame.distance * 0.82, horizontalRadius / Math.sin(limitingHalfFov) * 1.16);
+      camera.up.set(0, 0, -1);
+      camera.position.set(frame.target.x, frame.target.y + overheadDistance, frame.target.z);
       controls.target.copy(frame.target);
       controls.minDistance = Math.max(0.5, frame.radius * 0.08);
       controls.maxDistance = frame.distance * 7;
@@ -581,6 +648,7 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
     sceneRef.current = scene;
     cameraRef.current = camera;
     resetViewRef.current = resetView;
+    topViewRef.current = topView;
 
     const resizeObserver = new ResizeObserver(() => {
       const nextWidth = Math.max(1, host.clientWidth);
@@ -623,6 +691,16 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
         const wireMaterials = Array.isArray(wireframe.material) ? wireframe.material : [wireframe.material];
         wireMaterials.forEach((wireMaterial) => wireMaterial.dispose());
       }
+      for (const contourLine of [contourMinorRef.current, contourMajorRef.current]) {
+        if (contourLine) contourLine.geometry.dispose();
+      }
+      contourMinorMaterialRef.current?.dispose();
+      contourMajorMaterialRef.current?.dispose();
+      contourMinorRef.current = null;
+      contourMajorRef.current = null;
+      contourMinorMaterialRef.current = null;
+      contourMajorMaterialRef.current = null;
+      contourAttachedRef.current = null;
       for (const child of supportGroup.children) {
         if (!(child instanceof THREE.Mesh)) continue;
         child.geometry.dispose();
@@ -652,6 +730,7 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
       ambientLightRef.current = null;
       directionalLightRef.current = null;
       resetViewRef.current = null;
+      topViewRef.current = null;
     };
   }, [loadState, meshData, rendererVersion, volumeSupportData]);
 
@@ -723,10 +802,14 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
       window.sessionStorage.setItem(MODEL_BOUNDARY_STORAGE_KEY, boundaryMode);
       window.sessionStorage.setItem(MODEL_WIREFRAME_STORAGE_KEY, String(showTriangularMesh));
       window.sessionStorage.setItem(MODEL_EXAGGERATION_STORAGE_KEY, String(exaggeration));
+      window.sessionStorage.setItem(MODEL_CONTOURS_STORAGE_KEY, String(showContours));
+      window.sessionStorage.setItem(MODEL_CONTOUR_INTERVAL_STORAGE_KEY, contourIntervalChoice);
+      window.sessionStorage.setItem(MODEL_CONTOUR_MAJORS_STORAGE_KEY, String(emphasizeMajorContours));
+      window.sessionStorage.setItem(MODEL_CONTOUR_OPACITY_STORAGE_KEY, String(contourOpacity));
     } catch {
       // The current view still works when session storage is unavailable.
     }
-  }, [modelShape, terrainTheme, boundaryMode, showTriangularMesh, exaggeration]);
+  }, [modelShape, terrainTheme, boundaryMode, showTriangularMesh, exaggeration, showContours, contourIntervalChoice, emphasizeMajorContours, contourOpacity]);
 
   useEffect(() => {
     exaggerationRef.current = exaggeration;
@@ -788,6 +871,107 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
   const categoryCoveragePercent = (coverage: { fraction_of_elevation_samples_covered: number } | null) => (
     coverage ? numberFormat.format(coverage.fraction_of_elevation_samples_covered * 100) : "0"
   );
+  const effectiveContourIntervalM = contourIntervalChoice === "auto"
+    ? meshData?.minimumElevationM !== null && meshData?.minimumElevationM !== undefined && meshData.maximumElevationM !== null
+      ? selectAutomaticContourInterval(meshData.minimumElevationM, meshData.maximumElevationM)
+      : 20
+    : Number(contourIntervalChoice);
+
+  useEffect(() => {
+    const cached = contourCacheRef.current;
+    if (cached && (cached.model !== model || cached.meshData !== meshData)) {
+      contourCacheRef.current = null;
+      setContourSummary(null);
+    }
+  }, [model, meshData]);
+
+  useEffect(() => {
+    const group = modelGroupRef.current;
+    if (!showContours || !model || !meshData || !group) return;
+
+    let cached = contourCacheRef.current;
+    if (!cached || cached.model !== model || cached.meshData !== meshData || cached.intervalM !== effectiveContourIntervalM) {
+      const result = buildTerrainContours(model.grid, meshData, effectiveContourIntervalM);
+      cached = { model, meshData, intervalM: effectiveContourIntervalM, result };
+      contourCacheRef.current = cached;
+    }
+    setContourSummary(cached.result);
+
+    const attached = contourAttachedRef.current;
+    if (attached?.model === model && attached.meshData === meshData
+      && attached.intervalM === effectiveContourIntervalM && attached.rendererVersion === rendererVersion) return;
+
+    const spacing = Math.min(model.grid.sample_spacing_m.east, model.grid.sample_spacing_m.north);
+    const verticalOffsetM = Math.max(0.005, spacing * 0.001);
+    const updateLine = (
+      current: THREE.LineSegments | null,
+      positions: Float32Array,
+      name: string,
+      color: string,
+    ): THREE.LineSegments | null => {
+      if (!current && positions.length === 0) return null;
+      const geometry = positions.length ? createContourGeometry(positions, verticalOffsetM) : new THREE.BufferGeometry();
+      if (current) {
+        current.geometry.dispose();
+        current.geometry = geometry;
+        return current;
+      }
+      const material = new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.5,
+        depthTest: true,
+        depthWrite: false,
+        toneMapped: false,
+      });
+      const line = new THREE.LineSegments(geometry, material);
+      line.name = name;
+      line.visible = false;
+      line.renderOrder = 3;
+      group.add(line);
+      return line;
+    };
+
+    const baseColor = themeRef.current === "dark" ? "#d8e2df" : "#263c49";
+    const masterColor = themeRef.current === "dark" ? "#fff0bd" : "#123144";
+    const minorLine = updateLine(
+      contourMinorRef.current,
+      cached.result.minorPositions,
+      "Terrain contour segments",
+      baseColor,
+    );
+    const majorLine = updateLine(
+      contourMajorRef.current,
+      cached.result.majorPositions,
+      "Terrain master contour segments",
+      masterColor,
+    );
+    contourMinorRef.current = minorLine;
+    contourMajorRef.current = majorLine;
+    contourMinorMaterialRef.current = minorLine?.material as THREE.LineBasicMaterial | null ?? null;
+    contourMajorMaterialRef.current = majorLine?.material as THREE.LineBasicMaterial | null ?? null;
+    contourAttachedRef.current = { model, meshData, intervalM: effectiveContourIntervalM, rendererVersion };
+    scheduleSceneRender(rendererRef.current, sceneRef.current, cameraRef.current, frameRequestRef);
+  }, [showContours, model, meshData, effectiveContourIntervalM, rendererVersion]);
+
+  useEffect(() => {
+    const hasLines = showContours && contourSummary?.status === "ready" && contourSummary.segmentCount > 0;
+    const minorMaterial = contourMinorMaterialRef.current;
+    const majorMaterial = contourMajorMaterialRef.current;
+    if (minorMaterial) {
+      minorMaterial.color.set(theme === "dark" ? "#d8e2df" : "#263c49");
+      minorMaterial.opacity = contourOpacity * 0.68;
+    }
+    if (majorMaterial) {
+      majorMaterial.color.set(theme === "dark"
+        ? (emphasizeMajorContours ? "#fff0bd" : "#d8e2df")
+        : (emphasizeMajorContours ? "#123144" : "#263c49"));
+      majorMaterial.opacity = contourOpacity * (emphasizeMajorContours ? 1 : 0.68);
+    }
+    if (contourMinorRef.current) contourMinorRef.current.visible = Boolean(hasLines && contourSummary && contourSummary.minorPositions.length > 0);
+    if (contourMajorRef.current) contourMajorRef.current.visible = Boolean(hasLines && contourSummary && contourSummary.majorPositions.length > 0);
+    scheduleSceneRender(rendererRef.current, sceneRef.current, cameraRef.current, frameRequestRef);
+  }, [showContours, contourSummary, contourOpacity, emphasizeMajorContours, theme, rendererVersion]);
 
   return (
     <div
@@ -865,14 +1049,19 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
                   <span ref={northIndicatorRef}>↑</span>
                   <strong>N</strong>
                 </div>
-                <button
-                  type="button"
-                  className="isolated-terrain-reset"
-                  onClick={() => resetViewRef.current?.()}
-                  title="Reiniciar la perspectiva del modelo"
-                >
-                  <RotateCcw size={14} aria-hidden="true" /> Restablecer vista
-                </button>
+                <div className="isolated-terrain-view-actions">
+                  <button type="button" className="isolated-terrain-top-view" onClick={() => topViewRef.current?.()} title="Ver el terreno desde arriba">
+                    <ArrowUp size={14} aria-hidden="true" /> Vista superior
+                  </button>
+                  <button
+                    type="button"
+                    className="isolated-terrain-reset"
+                    onClick={() => resetViewRef.current?.()}
+                    title="Reiniciar la perspectiva del modelo"
+                  >
+                    <RotateCcw size={14} aria-hidden="true" /> Restablecer vista
+                  </button>
+                </div>
                 <span className="isolated-terrain-hint">Arrastra para rotar · rueda o gesto para acercar · botón derecho o dos dedos para desplazar</span>
               </>
             )}
@@ -1042,6 +1231,65 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
                 <input type="checkbox" checked={showTriangularMesh} onChange={(event) => setShowTriangularMesh(event.target.checked)} />
                 <span>Mostrar malla triangular</span>
               </label>
+              <label className="isolated-terrain-wireframe-toggle isolated-terrain-contour-toggle">
+                <input type="checkbox" checked={showContours} onChange={(event) => setShowContours(event.target.checked)} />
+                <span>Mostrar curvas de nivel</span>
+              </label>
+              <div className={`isolated-terrain-contour-controls${showContours ? "" : " is-disabled"}`} aria-disabled={!showContours}>
+                <label htmlFor="isolated-terrain-contour-interval">Equidistancia</label>
+                <select
+                  id="isolated-terrain-contour-interval"
+                  value={contourIntervalChoice}
+                  disabled={!showContours}
+                  onChange={(event) => setContourIntervalChoice(event.target.value as ContourIntervalChoice)}
+                >
+                  <option value="auto">Automática</option>
+                  <option value="5">5 m</option>
+                  <option value="10">10 m</option>
+                  <option value="20">20 m</option>
+                  <option value="50">50 m</option>
+                  <option value="100">100 m</option>
+                  <option value="200">200 m</option>
+                </select>
+                <label className="isolated-terrain-wireframe-toggle">
+                  <input
+                    type="checkbox"
+                    checked={emphasizeMajorContours}
+                    disabled={!showContours}
+                    onChange={(event) => setEmphasizeMajorContours(event.target.checked)}
+                  />
+                  <span>Destacar curvas maestras · cada 5 intervalos</span>
+                </label>
+                <div className="isolated-terrain-range-row">
+                  <label htmlFor="isolated-terrain-contour-opacity">Opacidad</label>
+                  <input
+                    id="isolated-terrain-contour-opacity"
+                    type="range"
+                    min="0.2"
+                    max="1"
+                    step="0.01"
+                    value={contourOpacity}
+                    disabled={!showContours}
+                    onChange={(event) => setContourOpacity(Number(event.target.value))}
+                    aria-valuetext={`${integerFormat.format(contourOpacity * 100)} %`}
+                  />
+                  <strong>{integerFormat.format(contourOpacity * 100)} %</strong>
+                </div>
+                {showContours && contourSummary && (
+                  <div className={`isolated-terrain-contour-status isolated-terrain-contour-status--${contourSummary.status}`} role="status">
+                    {contourSummary.status === "ready" && contourSummary.segmentCount > 0
+                      ? `Equidistancia efectiva: ${formatMeters(contourSummary.intervalM)} · ${contourSummary.levels.length} niveles · ${contourSummary.majorLevelCount} cotas maestras.`
+                      : contourSummary.status === "ready"
+                        ? "No hay tramos de curva en esta cuadrícula; una superficie plana no genera líneas decorativas."
+                        : contourSummary.status === "no_data"
+                          ? "La malla no contiene elevaciones válidas para generar curvas."
+                          : contourSummary.status === "no_levels"
+                            ? "No hay múltiplos absolutos de esta equidistancia dentro del rango del terreno."
+                            : "Esta equidistancia genera demasiados niveles o segmentos. Elige un intervalo mayor."}
+                  </div>
+                )}
+                <small className="isolated-terrain-contour-note">Curvas calculadas sobre la cuadrícula visual Copernicus ({model ? `${formatMeters(model.grid.sample_spacing_m.east)} × ${formatMeters(model.grid.sample_spacing_m.north)}` : "resolución no disponible"}). Son una ayuda de inspección, no cartografía topográfica de precisión.</small>
+              </div>
             </div>
 
             <div className="isolated-terrain-control">

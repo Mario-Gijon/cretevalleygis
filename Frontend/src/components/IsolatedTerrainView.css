@@ -102,7 +102,8 @@
 
 .isolated-terrain-close:focus-visible,
 .isolated-terrain-retry:focus-visible,
-.isolated-terrain-reset:focus-visible {
+.isolated-terrain-reset:focus-visible,
+.isolated-terrain-top-view:focus-visible {
   outline: 2px solid var(--cv-teal);
   outline-offset: 2px;
 }
@@ -175,10 +176,17 @@
   color: var(--text);
 }
 
-.isolated-terrain-reset {
+.isolated-terrain-view-actions {
   position: absolute;
   top: 14px;
   right: 14px;
+  display: inline-flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.isolated-terrain-reset,
+.isolated-terrain-top-view {
   display: inline-flex;
   min-height: 33px;
   align-items: center;
@@ -198,7 +206,12 @@
   color: var(--text);
 }
 
-.isolated-terrain-reset:hover {
+.app-shell[data-theme="dark"] .isolated-terrain-top-view {
+  color: var(--text);
+}
+
+.isolated-terrain-reset:hover,
+.isolated-terrain-top-view:hover {
   border-color: var(--cv-teal);
 }
 
@@ -611,6 +624,80 @@
   height: 14px;
   margin: 0;
   accent-color: var(--cv-blue);
+}
+
+.isolated-terrain-contour-controls {
+  display: grid;
+  gap: 6px;
+  padding: 4px 1px 0 21px;
+}
+
+.isolated-terrain-contour-controls.is-disabled {
+  opacity: 0.56;
+}
+
+.isolated-terrain-contour-controls > label:not(.isolated-terrain-wireframe-toggle),
+.isolated-terrain-contour-controls .isolated-terrain-range-row > label {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 600;
+}
+
+.isolated-terrain-contour-controls select {
+  width: 100%;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font: inherit;
+  font-size: 9px;
+}
+
+.isolated-terrain-contour-controls select:focus-visible,
+.isolated-terrain-contour-controls input:focus-visible {
+  outline: 2px solid var(--cv-teal);
+  outline-offset: 1px;
+}
+
+.isolated-terrain-contour-controls .isolated-terrain-range-row {
+  gap: 7px;
+}
+
+.isolated-terrain-contour-controls .isolated-terrain-range-row > label {
+  flex: 0 0 auto;
+}
+
+.isolated-terrain-contour-controls .isolated-terrain-range-row strong {
+  min-width: 34px;
+  font-size: 9px;
+}
+
+.isolated-terrain-contour-status {
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.isolated-terrain-contour-status--level_limit,
+.isolated-terrain-contour-status--segment_limit {
+  border-color: #ead3aa;
+}
+
+.app-shell[data-theme="dark"] .isolated-terrain-contour-status--level_limit,
+.app-shell[data-theme="dark"] .isolated-terrain-contour-status--segment_limit {
+  border-color: #735c38;
+}
+
+.isolated-terrain-contour-note {
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.45;
 }
 
 .isolated-terrain-control {
