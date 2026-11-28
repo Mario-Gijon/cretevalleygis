@@ -18,7 +18,7 @@ from urllib.parse import urlencode
 
 from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from osgeo import gdal
 
 from terrain_request import (
@@ -33,6 +33,16 @@ from terrain_derivative_config import DERIVATIVE_STYLE_VERSION
 from terrain_style_config import REGIONAL_ELEVATION_STYLE_VERSION, regional_elevation_style
 from app.zonal_statistics import SCHEMA_VERSION as ZONAL_STATISTICS_SCHEMA_VERSION
 from app.zonal_statistics import calculate_zonal_terrain_statistics, geometry_bbox_wgs84
+from app.terrain_model import (
+    COPERNICUS_SOURCE as TERRAIN_MODEL_SOURCE,
+    DEFAULT_MAX_DIMENSION as DEFAULT_TERRAIN_MODEL_MAX_DIMENSION,
+    MAX_MAX_DIMENSION as MAX_TERRAIN_MODEL_MAX_DIMENSION,
+    MIN_MAX_DIMENSION as MIN_TERRAIN_MODEL_MAX_DIMENSION,
+    SCHEMA_VERSION as TERRAIN_MODEL_SCHEMA_VERSION,
+    TerrainModelError,
+    extract_terrain_model,
+    validate_geometry as validate_terrain_model_geometry,
+)
 from app.geometry_operations import (
     MAX_BUFFER_DISTANCE_M,
     GeometryEngineUnavailable,
@@ -124,6 +134,89 @@ class GeometryOverlayRequest(BaseModel):
     geometry_b: dict[str, Any]
 
 
+class TerrainModelPoint(BaseModel):
+    east: float
+    north: float
+
+
+class TerrainModelOrigin(BaseModel):
+    projected_m: TerrainModelPoint
+    local_m: TerrainModelPoint
+    definition: str
+
+
+class TerrainModelGrid(BaseModel):
+    columns: int = Field(ge=2, le=MAX_TERRAIN_MODEL_MAX_DIMENSION)
+    rows: int = Field(ge=2, le=MAX_TERRAIN_MODEL_MAX_DIMENSION)
+    first_sample_local_m: TerrainModelPoint
+    sample_spacing_m: TerrainModelPoint
+    column_order: Literal["west_to_east"]
+    row_order: Literal["north_to_south"]
+    position_convention: str
+    sampling_method: Literal["native_pixel_centres", "bilinear_at_cell_centres"]
+    values_m: list[list[float | None]]
+
+    @model_validator(mode="after")
+    def validate_grid_dimensions(self) -> "TerrainModelGrid":
+        if len(self.values_m) != self.rows or any(len(row) != self.columns for row in self.values_m):
+            raise ValueError("terrain grid values must match the declared rows and columns")
+        return self
+
+
+class TerrainModelCoverage(BaseModel):
+    availability: Literal["available", "partial", "no_data", "insufficient_data"]
+    valid_samples: int = Field(ge=0)
+    missing_samples: int = Field(ge=0)
+    valid_sample_fraction: float = Field(ge=0.0, le=1.0)
+
+
+class TerrainModelExtent(BaseModel):
+    west: float
+    south: float
+    east: float
+    north: float
+
+
+class TerrainModelElevationRange(BaseModel):
+    minimum: float
+    maximum: float
+
+
+class TerrainModelContext(BaseModel):
+    requested_margin_m: float = Field(ge=0.0)
+    was_clipped_to_coverage: bool
+
+
+class TerrainModelResponse(BaseModel):
+    schema_version: Literal["1.0"] = TERRAIN_MODEL_SCHEMA_VERSION
+    analysis_id: str
+    source: Literal["Copernicus DEM GLO-30 Public"]
+    model_type: Literal["DSM"]
+    horizontal_crs: str
+    vertical_reference: str | None
+    units: dict[Literal["horizontal", "vertical"], str]
+    source_resolution_m: TerrainModelPoint
+    source_nodata: float | None
+    extent_projected_m: TerrainModelExtent
+    local_origin: TerrainModelOrigin
+    geometry_local_m: dict[str, Any]
+    grid: TerrainModelGrid
+    coverage: TerrainModelCoverage
+    sampled_elevation_range_m: TerrainModelElevationRange | None
+    context: TerrainModelContext
+    warnings: list[str]
+
+    @model_validator(mode="after")
+    def validate_grid_coverage(self) -> "TerrainModelResponse":
+        total = self.grid.rows * self.grid.columns
+        if self.coverage.valid_samples + self.coverage.missing_samples != total:
+            raise ValueError("terrain grid coverage counts do not match its dimensions")
+        expected_fraction = self.coverage.valid_samples / total
+        if not math.isclose(self.coverage.valid_sample_fraction, expected_fraction, abs_tol=1e-6):
+            raise ValueError("terrain grid valid fraction does not match its sample counts")
+        return self
+
+
 @dataclass
 class TerrainJob:
     job_id: str
@@ -168,6 +261,7 @@ class TerrainAnalysisJob:
 jobs: dict[str, TerrainJob] = {}
 analysis_jobs: dict[str, TerrainAnalysisJob] = {}
 jobs_lock = threading.Lock()
+terrain_model_lock = threading.Lock()
 active_job_id: str | None = None
 executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="terrain-preparation")
 
@@ -1335,3 +1429,94 @@ def get_terrain_analysis_result(analysis_id: str) -> dict[str, Any]:
             detail=job.error or {"code": "analysis_failed", "message": "Terrain analysis failed."},
         )
     return analysis_result_response(job)
+
+
+@app.get("/api/analysis/jobs/{analysis_id}/terrain-model", response_model=TerrainModelResponse)
+def get_analysis_terrain_model(
+    analysis_id: str,
+    max_dimension: int = Query(
+        default=DEFAULT_TERRAIN_MODEL_MAX_DIMENSION,
+        ge=MIN_TERRAIN_MODEL_MAX_DIMENSION,
+        le=MAX_TERRAIN_MODEL_MAX_DIMENSION,
+    ),
+) -> dict[str, Any]:
+    """Read a bounded visual grid from the elevation raster used by a completed analysis."""
+    global active_job_id
+    job = get_analysis_job_or_404(analysis_id)
+    if job.status == "failed":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=job.error or {"code": "analysis_failed", "message": "Terrain analysis failed."},
+        )
+    if job.status != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "analysis_in_progress", "message": "Terrain analysis has not completed."},
+        )
+    try:
+        validate_terrain_model_geometry(job.geometry)
+    except TerrainModelError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={"code": error.code, "message": error.public_message},
+        ) from error
+
+    if not terrain_model_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "terrain_model_busy", "message": "Another terrain extraction or processing job is active."},
+        )
+
+    reservation_id = f"terrain-model:{analysis_id}"
+    reserved = False
+    try:
+        with jobs_lock:
+            if active_job_id is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"code": "terrain_model_busy", "message": "Another terrain extraction or processing job is active."},
+                )
+            if not analysis_job_data_is_current(job):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"code": "terrain_data_unavailable", "message": "The completed analysis data is no longer available."},
+                )
+            if job.source != TERRAIN_MODEL_SOURCE or not job.raster_paths or not job.terrain_job_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"code": "terrain_data_unavailable", "message": "The completed analysis has no compatible elevation source."},
+                )
+            active_job_id = reservation_id
+            reserved = True
+
+        terrain_job = jobs.get(job.terrain_job_id) or load_persisted_job(job.terrain_job_id)
+        vertical_reference = None
+        if terrain_job and isinstance(terrain_job.result, dict):
+            vertical_reference = terrain_job.result.get("coverage", {}).get("vertical_datum")
+        model = extract_terrain_model(
+            job.geometry,
+            job.raster_paths["elevation"],
+            max_dimension,
+            analysis_id=job.analysis_id,
+            source=job.source,
+            vertical_reference=vertical_reference,
+            expected_horizontal_crs=job.horizontal_crs,
+        )
+        with jobs_lock:
+            if active_job_id != reservation_id or not analysis_job_data_is_current(job):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"code": "terrain_data_changed", "message": "The elevation source changed during extraction; request the model again."},
+                )
+        return model
+    except TerrainModelError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={"code": error.code, "message": error.public_message},
+        ) from error
+    finally:
+        if reserved:
+            with jobs_lock:
+                if active_job_id == reservation_id:
+                    active_job_id = None
+        terrain_model_lock.release()

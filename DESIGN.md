@@ -27,3 +27,4 @@
 - La atribución cartográfica permanece junto al mapa. No se duplica en el panel.
 - La escala gráfica, las coordenadas y las mediciones permanecen compactas en los bordes del mapa, también en pantallas pequeñas.
 - Las teselas de relieve sirven solo como contexto visual. Los datos preparados por área se conservan para análisis posteriores y no se activan al dibujar o seleccionar geometrías.
+- La futura vista 3D aislada de un área consumirá una cuadrícula de elevación versionada derivada del DEM numérico Copernicus enlazado a un análisis completado. El contrato mantiene la geometría local en metros, identifica las posiciones de muestra y representa NoData como nulo; no debe sustituir los resultados zonales ni consultar imágenes de mapa como fuente de altura.

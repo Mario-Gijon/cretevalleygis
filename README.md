@@ -278,6 +278,41 @@ Fragmento abreviado de una respuesta real:
 
 El resultado incluye la geometría original, versión del esquema, cobertura, unidades, distribuciones, advertencias y estadísticas completas. Una solicitud equivalente completada se reutiliza cuando coinciden la versión analítica, los productos numéricos y sus huellas de archivo; dos geometrías distintas mantienen identidades y resultados separados aunque compartan el mismo bbox. Los resultados completados se guardan atómicamente bajo `/io/data/terrain/analyses` en el volumen persistente; las rutas internas de los rásteres se conservan solo en ese archivo y no se devuelven por la API.
 
+### Cuadrícula de elevación para el futuro visor 3D aislado
+
+`GET /api/analysis/jobs/{analysis_id}/terrain-model` expone una cuadrícula numérica acotada para una alternativa cuyo análisis zonal ya terminó y conserva referencias vigentes. Reutiliza exclusivamente el GeoTIFF Copernicus DEM GLO-30 numérico enlazado al análisis: no consulta WMS, no usa las teselas Terrarium, no inicia trabajos ni descarga datos. El ráster sigue siendo un DSM; la respuesta incluye su procedencia, CRS horizontal, unidades y referencia vertical disponible (EGM2008 en los terrenos preparados actuales). Los valores de esta cuadrícula son para representación y no reemplazan las estadísticas zonales.
+
+El parámetro opcional `max_dimension` admite enteros de 16 a 256 y usa 128 por defecto. Cuando la ventana proyectada cabe en ese límite, se leen valores de píxel nativos. En ventanas mayores, GDAL genera una rejilla de hasta `256 × 256` con remuestreo bilineal y un límite de 32 MiB para su área de trabajo; las separaciones de salida nunca se reducen por debajo del tamaño de celda fuente. El remuestreo no modifica el GeoTIFF. La geometría determina la extensión rectangular y se añade un margen de contexto de 90 m a 300 m; si el ráster no lo cubre, se conserva la extensión completa de la geometría, se limita el contexto y se informa en `context` y `warnings`.
+
+La geometría de entrada es GeoJSON `Polygon` o `MultiPolygon` WGS84. El backend transforma una copia al CRS proyectado métrico del ráster y devuelve `geometry_local_m` conservando componentes y huecos. El origen local `(east=0, north=0)` es la esquina suroeste de `extent_projected_m`; X apunta al este e Y al norte. `grid.values_m` usa filas norte-sur y columnas oeste-este. `first_sample_local_m` identifica el centro de la primera celda y `sample_spacing_m` permite derivar las demás posiciones. La cuadrícula es rectangular: puede incluir elevación de contexto bajo los huecos del polígono y todavía no genera paredes ni recorta la malla a sus límites.
+
+Los valores NoData, enmascarados y no finitos se devuelven como `null`; cero y elevaciones negativas permanecen válidos. `coverage.availability` distingue `available`, `partial`, `no_data` e `insufficient_data`. Conteos y rango solo consideran muestras válidas. El futuro visor deberá omitir triángulos que atraviesen `null`. La cobertura describe esta cuadrícula visual, no la cobertura zonal del análisis. La respuesta tiene `schema_version: "1.0"`, filas y columnas, método de muestreo, geometría local, cobertura, rango visual y advertencias. El máximo es 65.536 muestras y se limita la geometría de salida a 50.000 vértices.
+
+Ejemplo abreviado (JSONC; se omiten partes de las coordenadas y la matriz):
+
+```http
+GET /api/analysis/jobs/725bfdc2d4d33eca/terrain-model?max_dimension=128
+```
+
+```jsonc
+{
+  "schema_version": "1.0",
+  "analysis_id": "725bfdc2d4d33eca",
+  "source": "Copernicus DEM GLO-30 Public",
+  "model_type": "DSM",
+  "horizontal_crs": "EPSG:32630",
+  "vertical_reference": "EGM2008",
+  "units": {"horizontal": "m", "vertical": "m"},
+  "local_origin": {"projected_m": {"east": 400000, "north": 4179000}, "local_m": {"east": 0, "north": 0}},
+  "geometry_local_m": {"type": "Polygon", "coordinates": [[/* vertices in local metres */]]},
+  "grid": {"columns": 128, "rows": 96, "row_order": "north_to_south", "column_order": "west_to_east", "sampling_method": "bilinear_at_cell_centres", "values_m": [[/* metres or null */], /* remaining rows */]},
+  "coverage": {"availability": "partial", "valid_samples": 11820, "missing_samples": 468, "valid_sample_fraction": 0.961914},
+  "sampled_elevation_range_m": {"minimum": 21.2, "maximum": 1012.4}
+}
+```
+
+El análisis debe estar completado y vigente. El endpoint no acepta rutas de archivo. Devuelve `404` si el análisis o sus datos no existen, `409` si sigue en curso o hay otro procesamiento/extracción activa, `422` para límites inválidos o un análisis fallido y `409` ante un ráster incompatible. Solo se admite una extracción simultánea; durante la lectura reserva el indicador de trabajo existente para evitar competir con una regeneración interna de terreno.
+
 ## Análisis desde la interfaz GIS
 
 Selecciona un área en la pestaña **Áreas** y pulsa **Analizar área** en su ficha. Se admiten geometrías `Polygon` y `MultiPolygon`; la segunda se conserva como una sola área con una identidad y un análisis zonal conjunto. La interfaz consulta el estado del trabajo mediante el proxy `/api`, muestra la fase del backend y presenta las estadísticas en esa misma ficha. Elevación media, pendiente media, desnivel y superficie con pendiente de hasta el 5 % aparecen primero; el resto de estadísticas, las distribuciones y la información de fuente y cobertura quedan agrupadas en secciones plegables. Cada resultado queda asociado a la revisión geométrica de su área durante la sesión: editar cualquier componente invalida solo ese resultado, mientras que renombrar conserva las estadísticas. No se inicia procesamiento al dibujar o seleccionar y el análisis no cambia la vista del mapa.
