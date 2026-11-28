@@ -161,9 +161,13 @@ export function useGeometryBuffer() {
         return;
       }
 
+      // The API payload is validated at runtime above; its generic GeoJSON shape
+      // does not preserve the Polygon/MultiPolygon discriminator through `json()`.
+      const surfaceGeometry = result.geometry as GeoJSONSurfaceGeometry;
+
       const currentSource = currentElementsRef.current.get(sourceId);
       if (!currentSource || currentSource.geometryRevision !== geometryRevision) return;
-      const projectedGeometry = geoJsonFormat.readGeometry(result.geometry, {
+      const projectedGeometry = geoJsonFormat.readGeometry(surfaceGeometry, {
         dataProjection: "EPSG:4326",
         featureProjection: "EPSG:3857",
       });
@@ -179,7 +183,7 @@ export function useGeometryBuffer() {
         });
         return;
       }
-      if (projectedGeometry.getType() !== result.geometry.type || projectedGeometry.getCoordinates().length === 0) {
+      if (projectedGeometry.getType() !== surfaceGeometry.type || projectedGeometry.getCoordinates().length === 0) {
         publish({
           status: "error",
           sourceId,
@@ -198,7 +202,7 @@ export function useGeometryBuffer() {
         sourceId,
         geometryRevision,
         distanceMeters,
-        geometry: result.geometry,
+        geometry: surfaceGeometry,
         processingCrs: result.processing_crs,
         warnings,
       });

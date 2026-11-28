@@ -25,7 +25,7 @@ export type TerrariumTileStats = {
   failedRequests: boolean;
 };
 
-type TerrainTileRaster = {
+export type TerrariumDemTile = {
   data: Float32Array;
   stats: TerrariumTileStats;
 };
@@ -48,6 +48,7 @@ export type TerrariumDataTileSource = {
   getTileStats: (zoom: number, x: number, y: number) => TerrariumTileStats | undefined;
   samplePoint: (longitude: number, latitude: number, signal?: AbortSignal) => Promise<TerrariumPointNeighborhood>;
   sampleElevation: (longitude: number, latitude: number, options?: TerrariumElevationSampleOptions) => Promise<TerrariumElevationSample>;
+  loadDemTile: (zoom: number, x: number, y: number, signal?: AbortSignal) => Promise<TerrariumDemTile>;
 };
 
 export type TerrariumPointNeighborhood =
@@ -166,7 +167,8 @@ export function createTerrariumDataTileSource(): TerrariumDataTileSource {
   const decodedTiles = new Map<string, Promise<DecodedTerrariumTile | null>>();
   const failedTileExpirations = new Map<string, number>();
   const statsByTile = new Map<string, TerrariumTileStats>();
-  const baseRasterTiles = new Map<string, Promise<TerrainTileRaster>>();
+  const baseRasterTiles = new Map<string, Promise<TerrariumDemTile>>();
+  const failedBaseRasterExpirations = new Map<string, number>();
 
   const loadDecodedTile = (
     zoom: number,
@@ -204,7 +206,7 @@ export function createTerrariumDataTileSource(): TerrariumDataTileSource {
     x: number,
     y: number,
     signal: AbortSignal,
-  ): Promise<TerrainTileRaster> => {
+  ): Promise<TerrariumDemTile> => {
     const pixelCount = TILE_SIZE * TILE_SIZE;
     const output = new Float32Array(pixelCount * 2);
     const key = tileKey(zoom, x, y);
@@ -284,21 +286,65 @@ export function createTerrariumDataTileSource(): TerrariumDataTileSource {
     return { data: output, stats };
   };
 
-  const loadBaseRasterTile = (zoom: number, x: number, y: number, signal: AbortSignal): Promise<TerrainTileRaster> => {
+  const loadBaseRasterTile = (zoom: number, x: number, y: number, signal: AbortSignal): Promise<TerrariumDemTile> => {
     const key = tileKey(zoom, x, y);
     const cached = baseRasterTiles.get(key);
     if (cached) {
+      const failedUntil = failedBaseRasterExpirations.get(key);
+      if (!failedUntil || failedUntil > Date.now()) {
+        baseRasterTiles.delete(key);
+        baseRasterTiles.set(key, cached);
+        return cached;
+      }
+      failedBaseRasterExpirations.delete(key);
       baseRasterTiles.delete(key);
-      baseRasterTiles.set(key, cached);
-      return cached;
     }
-    const request = buildBaseRasterTile(zoom, wrappedTileX(x, zoom), y, signal).catch((error: unknown) => {
-      baseRasterTiles.delete(key);
-      throw error;
-    });
+
+    const request = buildBaseRasterTile(zoom, wrappedTileX(x, zoom), y, signal)
+      .then((tile) => {
+        if (tile.stats.failedRequests) {
+          failedBaseRasterExpirations.set(key, Date.now() + FAILED_TILE_CACHE_TTL_MS);
+          trimMap(failedBaseRasterExpirations, FAILED_TILE_CACHE_SIZE);
+        } else {
+          failedBaseRasterExpirations.delete(key);
+        }
+        return tile;
+      })
+      .catch((error: unknown) => {
+        baseRasterTiles.delete(key);
+        failedBaseRasterExpirations.delete(key);
+        throw error;
+      });
     baseRasterTiles.set(key, request);
     trimMap(baseRasterTiles, BASE_RASTER_CACHE_SIZE);
     return request;
+  };
+
+  const loadDemTile: TerrariumDataTileSource["loadDemTile"] = async (requestedZoom, requestedX, requestedY, signal) => {
+    let zoom = Math.floor(requestedZoom);
+    let x = Math.floor(requestedX);
+    let y = Math.floor(requestedY);
+    if (!Number.isFinite(zoom) || !Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new RangeError("Las coordenadas de tesela Terrarium no son válidas.");
+    }
+
+    if (zoom > EXPLORATION_TERRAIN.maxDataZoom) {
+      const overzoom = 2 ** (zoom - EXPLORATION_TERRAIN.maxDataZoom);
+      x = Math.floor(x / overzoom);
+      y = Math.floor(y / overzoom);
+      zoom = EXPLORATION_TERRAIN.maxDataZoom;
+    }
+
+    const tileCount = 2 ** zoom;
+    if (zoom < EXPLORATION_TERRAIN.mapMinimumZoom || y < 0 || y >= tileCount) {
+      const pixelCount = TILE_SIZE * TILE_SIZE;
+      return {
+        data: new Float32Array(pixelCount * 2),
+        stats: { validPixels: 0, fallbackPixels: 0, missingPixels: pixelCount, failedRequests: false },
+      };
+    }
+
+    return loadBaseRasterTile(zoom, wrappedTileX(x, zoom), y, signal ?? new AbortController().signal);
   };
 
   const sampleWorldPixel = async (
@@ -468,7 +514,7 @@ export function createTerrariumDataTileSource(): TerrariumDataTileSource {
       const tile = await loadBaseRasterTile(zoom, sourceX + tileX, neighborY, options.signal);
       return { offset: [tileX, tileY] as const, tile };
     }));
-    const rasterByOffset = new globalThis.Map<string, TerrainTileRaster>([
+    const rasterByOffset = new globalThis.Map<string, TerrariumDemTile>([
       ["0/0", centerTile],
       ...neighborTiles.flatMap(({ offset, tile }) => tile ? [[offset.join("/"), tile] as const] : []),
     ]);
@@ -509,6 +555,7 @@ export function createTerrariumDataTileSource(): TerrariumDataTileSource {
     getTileStats: (zoom, x, y) => statsByTile.get(tileKey(zoom, x, y)),
     samplePoint,
     sampleElevation,
+    loadDemTile,
   };
 }
 

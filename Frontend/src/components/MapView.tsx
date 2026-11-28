@@ -281,6 +281,9 @@ function trimMapEntries<T>(entries: globalThis.Map<string, T>, maximumSize: numb
 }
 
 type MapViewProps = {
+  active: boolean;
+  center: [number, number];
+  zoom: number;
   baseMap: BaseMapId;
   mapRef: MutableRef<Map | null>;
   baseLayersRef: MutableRef<BaseMapLayers | null>;
@@ -314,6 +317,9 @@ type MapViewProps = {
 };
 
 export default function MapView({
+  active,
+  center,
+  zoom,
   baseMap,
   mapRef,
   baseLayersRef,
@@ -360,6 +366,11 @@ export default function MapView({
   const scheduleElevationScaleRef = useRef<(() => void) | null>(null);
   const activeBaseMapRef = useRef<BaseMapId | null>(null);
   const disposedRef = useRef(false);
+  const suspendedRef = useRef(false);
+  const centerRef = useRef(center);
+  const zoomRef = useRef(zoom);
+  centerRef.current = center;
+  zoomRef.current = zoom;
   baseMapRef.current = baseMap;
   explorationStatusRef.current = onExplorationTerrainStatusChange;
   explorationScaleChangeRef.current = onExplorationElevationScaleChange;
@@ -1039,11 +1050,39 @@ export default function MapView({
   }, [baseLayersRef, baseMap, mapGeneration, mapRef, onOpenFreeMapStatusChange]);
 
 
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (!active) {
+      suspendedRef.current = true;
+      map.setTarget(undefined);
+      return;
+    }
+
+    const target = targetRef.current;
+    if (target && (!map.getTargetElement() || suspendedRef.current)) map.setTarget(target);
+    if (suspendedRef.current) {
+      const view = map.getView();
+      view.setCenter(fromLonLat(centerRef.current, view.getProjection()));
+      view.setZoom(zoomRef.current);
+      view.setRotation(0);
+      suspendedRef.current = false;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      map.updateSize();
+      map.render();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [active, mapGeneration, mapRef]);
+
+
 
   return (
     <div
       ref={targetRef}
-      className="map-canvas"
+      className={`map-canvas${active ? "" : " map-canvas--inactive"}`}
       role="application"
       aria-label="Mapa interactivo"
       tabIndex={0}

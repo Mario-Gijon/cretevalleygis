@@ -132,6 +132,29 @@ button {
   height: 100%;
 }
 
+.map-mode-switch {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.map-mode-switch .ui-button--ghost {
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.map-mode-switch .map-mode-switch__active {
+  background: var(--cv-blue);
+  color: #ffffff;
+}
+
 .app-header > .place-search-control {
   flex: 0 1 360px;
   width: min(360px, 40vw);
@@ -3319,6 +3342,234 @@ button {
   outline: none;
 }
 
+.map-canvas--inactive {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.terrain-3d-canvas {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: #dce6e8;
+}
+
+.app-shell[data-theme="dark"] .terrain-3d-canvas {
+  background: #122a3b;
+}
+
+.terrain-3d-canvas .maplibregl-canvas {
+  outline: none;
+}
+
+.terrain-3d-canvas .maplibregl-ctrl-attrib {
+  max-width: min(70vw, 510px);
+  font-family: "Inter Variable", Inter, sans-serif;
+  font-size: 9px;
+}
+
+.terrain-3d-canvas .maplibregl-ctrl-scale {
+  border-color: var(--cv-navy);
+  background: rgb(255 255 255 / 88%);
+  color: var(--cv-navy);
+  font-family: "Inter Variable", Inter, sans-serif;
+  font-size: 9px;
+}
+
+.terrain-3d-toolbar {
+  position: absolute;
+  z-index: 3;
+  top: 13px;
+  left: 50%;
+  display: flex;
+  max-width: calc(100% - 240px);
+  align-items: center;
+  gap: 5px;
+  padding: 5px;
+  transform: translateX(-50%);
+  border: 1px solid rgb(220 228 235 / 90%);
+  border-radius: 12px;
+  background: rgb(5 41 76 / 94%);
+  box-shadow: 0 5px 18px rgb(5 41 76 / 20%);
+  color: #ffffff;
+  font-size: 10px;
+}
+
+.terrain-3d-toolbar[data-theme="dark"] {
+  border-color: rgb(97 124 146 / 55%);
+  background: rgb(11 27 42 / 95%);
+}
+
+.terrain-3d-style-control {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-left: 5px;
+  white-space: nowrap;
+}
+
+.terrain-3d-style-control select {
+  max-width: 116px;
+  min-height: 30px;
+  padding: 0 22px 0 8px;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 8px;
+  background: #123d60;
+  color: #ffffff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.terrain-3d-style-control select:focus-visible,
+.terrain-3d-settings summary:focus-visible,
+.terrain-3d-reset:focus-visible {
+  outline: 2px solid var(--cv-teal);
+  outline-offset: 2px;
+}
+
+.terrain-3d-settings {
+  position: relative;
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  padding: 0 8px;
+  border-left: 1px solid rgb(255 255 255 / 17%);
+}
+
+.terrain-3d-settings summary {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.terrain-3d-settings[open] {
+  align-self: stretch;
+}
+
+.terrain-3d-settings[open] > :not(summary) {
+  display: block;
+}
+
+.terrain-3d-settings[open] {
+  color: #ffffff;
+}
+
+.terrain-3d-settings[open] > label,
+.terrain-3d-settings[open] > span,
+.terrain-3d-settings[open] > input {
+  position: absolute;
+  z-index: 6;
+  right: 0;
+  width: 220px;
+  padding: 9px 11px;
+  background: #123d60;
+}
+
+.terrain-3d-settings[open] > label {
+  top: calc(100% + 7px);
+  border-radius: 9px 9px 0 0;
+  font-size: 10px;
+}
+
+.terrain-3d-settings[open] > input {
+  top: calc(100% + 29px);
+  width: 220px;
+  padding: 8px 11px;
+  accent-color: var(--cv-teal);
+}
+
+.terrain-3d-settings[open] > span {
+  top: calc(100% + 56px);
+  border-radius: 0 0 9px 9px;
+  color: #c3d5e2;
+  font-size: 9px;
+}
+
+.terrain-3d-reset {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 0;
+  border-left: 1px solid rgb(255 255 255 / 17%);
+  border-radius: 0 7px 7px 0;
+  background: transparent;
+  color: #ffffff;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.terrain-3d-reset:hover {
+  background: rgb(255 255 255 / 10%);
+}
+
+.terrain-3d-loading,
+.terrain-3d-status {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgb(220 228 235 / 88%);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 94%);
+  color: var(--cv-navy);
+  box-shadow: 0 3px 12px rgb(5 41 76 / 12%);
+  font-size: 10px;
+}
+
+.terrain-3d-loading {
+  inset: 50% auto auto 50%;
+  padding: 11px 14px;
+  transform: translate(-50%, -50%);
+}
+
+.terrain-3d-status {
+  bottom: 50px;
+  left: 16px;
+  max-width: min(460px, calc(100% - 110px));
+  min-height: 30px;
+  padding: 6px 9px;
+}
+
+.terrain-3d-status--warning {
+  border-color: #e5c58d;
+  color: #77521d;
+}
+
+.terrain-3d-home {
+  position: absolute;
+  z-index: 2;
+  right: 14px;
+  bottom: 52px;
+}
+
+.terrain-3d-panel-note {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.terrain-3d-panel-note > svg {
+  color: var(--cv-teal);
+}
+
+.terrain-3d-panel-note strong {
+  color: var(--text);
+}
+
+
 .map-location-chip {
   position: absolute;
   z-index: 1;
@@ -3337,6 +3588,10 @@ button {
   font-size: 11px;
   font-weight: 570;
   pointer-events: none;
+}
+
+.map-location-chip--3d {
+  top: 66px;
 }
 
 .map-center-coordinates {
@@ -3910,6 +4165,32 @@ button {
     left: 12px;
   }
 
+  .map-location-chip--3d {
+    top: 107px;
+  }
+
+  .terrain-3d-toolbar {
+    top: 53px;
+    right: 12px;
+    left: 12px;
+    max-width: none;
+    flex-wrap: wrap;
+    justify-content: center;
+    transform: none;
+  }
+
+  .terrain-3d-status {
+    bottom: 50px;
+    left: 12px;
+    max-width: calc(100% - 88px);
+    font-size: 9px;
+  }
+
+  .terrain-3d-home {
+    right: 11px;
+    bottom: 45px;
+  }
+
   .map-tools-cluster {
     top: 55px;
     right: 12px;
@@ -4044,6 +4325,17 @@ button {
 
   .header-actions {
     gap: 4px;
+  }
+
+  .map-mode-switch {
+    gap: 0;
+    padding: 2px;
+  }
+
+  .map-mode-switch .ui-button--ghost {
+    min-height: 27px;
+    padding: 0 6px;
+    font-size: 9px;
   }
 
   .layers-button > span {

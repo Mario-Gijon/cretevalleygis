@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import {
   Check,
@@ -21,9 +21,10 @@ import {
   Waves,
   X,
 } from "lucide-react";
-import { fromLonLat, transformExtent } from "ol/proj.js";
+import { fromLonLat, toLonLat, transformExtent } from "ol/proj.js";
 import type OlMap from "ol/Map.js";
 import MapView, { type BaseMapLayers, type MapStatus, type QgisStatus } from "@/components/MapView";
+import type { Terrain3DCamera } from "@/components/Terrain3DView";
 import {
   OPEN_FREE_MAP_STYLES,
   TERRAIN_BASE_MAPS,
@@ -86,6 +87,9 @@ type ThemeMode = "light" | "dark";
 type PanelTab = "layers" | "areas";
 type AreaPanelView = "list" | "detail";
 type TerrainTheme = "elevation" | "slope" | "aspect";
+type ViewMode = "2d" | "3d";
+
+const Terrain3DView = lazy(() => import("@/components/Terrain3DView"));
 
 function initialTheme(): ThemeMode {
   try {
@@ -108,6 +112,25 @@ function initialBaseMap(): BaseMapId {
     // Use the default map if local storage is unavailable.
   }
   return "positron";
+}
+
+function initialTerrain3DStyle(): OpenFreeMapId {
+  try {
+    const storedStyle = window.localStorage.getItem("cv-gis-3d-style");
+    if (storedStyle && storedStyle in OPEN_FREE_MAP_STYLES) return storedStyle as OpenFreeMapId;
+  } catch {
+    // Fall back to the clean OpenFreeMap style.
+  }
+  return "positron";
+}
+
+function hasSavedTerrain3DStyle(): boolean {
+  try {
+    const style = window.localStorage.getItem("cv-gis-3d-style");
+    return Boolean(style && style in OPEN_FREE_MAP_STYLES);
+  } catch {
+    return false;
+  }
 }
 
 const BASE_MAP_OPTIONS: Array<{ id: BaseMapId; title: string; description: string }> = [
@@ -205,8 +228,16 @@ export default function App() {
     error: false,
   });
   const [mapCenter, setMapCenter] = useState<[number, number]>([...CRETE_CENTER]);
+  const [viewMode, setViewMode] = useState<ViewMode>("2d");
+  const [terrainCamera, setTerrainCamera] = useState<Terrain3DCamera | null>(null);
+  const [terrain3DStyle, setTerrain3DStyle] = useState<OpenFreeMapId>(initialTerrain3DStyle);
+  const [terrainExaggeration, setTerrainExaggeration] = useState(1);
+  const [terrainNavigationRevision, setTerrainNavigationRevision] = useState(0);
+  const terrain3DStyleChosenRef = useRef(hasSavedTerrain3DStyle());
+  const viewModeRef = useRef(viewMode);
 
   baseMapRef.current = baseMap;
+  viewModeRef.current = viewMode;
 
   useEffect(() => {
     elevationProfiles.syncElements(drawingTools.elements.map(({ id, geometryType, geometryRevision }) => ({
@@ -261,7 +292,55 @@ export default function App() {
     pointInspector.setEnabled(!pointInspector.active);
   }, [drawingTools.setActiveTool, pointInspector.active, pointInspector.setEnabled]);
 
+  const requestTerrainNavigation = useCallback((center: [number, number], zoom: number) => {
+    const safeZoom = Math.max(1, Math.min(18, zoom));
+    setMapCenter(center);
+    setMapZoom(safeZoom + 1);
+    setTerrainCamera((current) => ({
+      center,
+      zoom: safeZoom,
+      bearing: current?.bearing ?? 0,
+      pitch: current?.pitch ?? 58,
+    }));
+    setTerrainNavigationRevision((revision) => revision + 1);
+  }, []);
+
   const navigateToSearchSelection = useCallback((selection: SearchSelection) => {
+    if (viewModeRef.current === "3d") {
+      if ("extent" in selection && selection.extent) {
+        const view = mapRef.current?.getView();
+        if (!view) return;
+        const [west, south, east, north] = selection.extent;
+        const latitudeLimit = 85.05112878;
+        const extent = transformExtent(
+          [west, Math.max(-latitudeLimit, south), east, Math.min(latitudeLimit, north)],
+          "EPSG:4326",
+          view.getProjection(),
+        );
+        const center = toLonLat([(extent[0] + extent[2]) / 2, (extent[1] + extent[3]) / 2], view.getProjection()) as [number, number];
+        const stage = mapStageRef.current;
+        const width = Math.max(320, (stage?.clientWidth ?? 900) - 72);
+        const height = Math.max(240, (stage?.clientHeight ?? 600) - 170);
+        const worldWidth = 2 * Math.PI * 6378137;
+        const spanX = Math.max(1, extent[2] - extent[0]);
+        const spanY = Math.max(1, extent[3] - extent[1]);
+        const fitZoom = Math.log2(Math.min(width * worldWidth / (512 * spanX), height * worldWidth / (512 * spanY)));
+        requestTerrainNavigation(center, Math.max(1, Math.min(15, fitZoom)));
+        placeSearchMarker.clear();
+        return;
+      }
+
+      const [longitude, latitude] = selection.coordinates;
+      placeSearchMarker.show(longitude, latitude);
+      const openLayersZoom = selection.type === "coordinates"
+        ? 11.5
+        : selection.type === "capital" || selection.type === "regional-capital"
+          ? 10.5
+          : selection.type === "city" ? 10 : 11.5;
+      requestTerrainNavigation([longitude, latitude], openLayersZoom - 1);
+      return;
+    }
+
     const map = mapRef.current;
     const view = map?.getView();
     if (!map || !view) return;
@@ -295,7 +374,7 @@ export default function App() {
       zoom,
       duration: 560,
     });
-  }, [placeSearchMarker.clear, placeSearchMarker.show]);
+  }, [placeSearchMarker.clear, placeSearchMarker.show, requestTerrainNavigation]);
 
   const handleQgisStatusChange = useCallback((status: QgisStatus) => {
     setQgisStatus(status);
@@ -402,6 +481,38 @@ export default function App() {
     ? "positron"
     : baseMap === "osm" || baseMap === "qgis" ? null : baseMap;
   const selectedVectorStatus = selectedVectorBaseMap ? openFreeMapStatus[selectedVectorBaseMap] : "idle";
+
+  const changeViewMode = (nextMode: ViewMode) => {
+    if (nextMode === viewMode) return;
+    if (nextMode === "3d") {
+      if (!terrain3DStyleChosenRef.current) setTerrain3DStyle(selectedVectorBaseMap ?? "positron");
+      setTerrainCamera((current) => current ?? {
+        center: mapCenter,
+        // MapLibre's 512-pixel world tiles use a zoom one level lower than OpenLayers.
+        zoom: Math.max(1, Math.min(18, mapZoom - 1)),
+        bearing: 0,
+        pitch: 58,
+      });
+    }
+    setViewMode(nextMode);
+  };
+
+  const handleTerrainCameraChange = useCallback((camera: Terrain3DCamera) => {
+    setTerrainCamera(camera);
+    setMapCenter(camera.center);
+    setMapZoom(camera.zoom + 1);
+  }, []);
+
+  const handleTerrainStyleChange = useCallback((style: OpenFreeMapId) => {
+    terrain3DStyleChosenRef.current = true;
+    setTerrain3DStyle(style);
+    try {
+      window.localStorage.setItem("cv-gis-3d-style", style);
+    } catch {
+      // Keep the selected style for this session.
+    }
+  }, []);
+
   const selectedElement = drawingTools.selectedElementInfo;
   const areaElements = useMemo(
     () => drawingTools.elements.filter((element) => isSurfaceGeometryType(element.geometryType)),
@@ -518,6 +629,10 @@ export default function App() {
   }, [selectedElement]);
 
   const changeZoom = (amount: number) => {
+    if (viewMode === "3d") {
+      requestTerrainNavigation(terrainCamera?.center ?? mapCenter, (terrainCamera?.zoom ?? mapZoom - 1) + amount);
+      return;
+    }
     const view = mapRef.current?.getView();
     if (!view) return;
     const zoom = view.getZoom() ?? 7.6;
@@ -525,6 +640,14 @@ export default function App() {
   };
 
   const resetView = () => {
+    if (viewMode === "3d") {
+      const camera: Terrain3DCamera = { center: [...CRETE_CENTER], zoom: 6.6, bearing: 0, pitch: 58 };
+      setMapCenter(camera.center);
+      setMapZoom(camera.zoom + 1);
+      setTerrainCamera(camera);
+      setTerrainNavigationRevision((revision) => revision + 1);
+      return;
+    }
     mapRef.current?.getView().animate({
       center: fromLonLat([...CRETE_CENTER]),
       zoom: 7.6,
@@ -574,6 +697,7 @@ export default function App() {
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
+      if (viewMode === "3d") return;
       if (event.defaultPrevented || event.altKey) return;
 
       const target = event.target;
@@ -615,6 +739,7 @@ export default function App() {
     drawingTools.finishTrace,
     drawingTools.undoLastVertex,
     drawingTools.selectedIds.length,
+    viewMode,
   ]);
 
   return (
@@ -634,6 +759,22 @@ export default function App() {
         <PlaceSearchControl onSelect={navigateToSearchSelection} />
 
         <div className="header-actions flex items-center gap-2">
+          <div className="map-mode-switch" role="group" aria-label="Modo de visualización">
+            <Button
+              variant="ghost"
+              size="small"
+              className={viewMode === "2d" ? "map-mode-switch__active" : undefined}
+              aria-pressed={viewMode === "2d"}
+              onClick={() => changeViewMode("2d")}
+            >2D</Button>
+            <Button
+              variant="ghost"
+              size="small"
+              className={viewMode === "3d" ? "map-mode-switch__active" : undefined}
+              aria-pressed={viewMode === "3d"}
+              onClick={() => changeViewMode("3d")}
+            >3D</Button>
+          </div>
           <Button
             variant="ghost"
             size="small"
@@ -715,7 +856,13 @@ export default function App() {
             ))}
           </div>
           <div className="panel-content" id="panel-tab-content" role="tabpanel" aria-labelledby={`panel-tab-${panelTab}`}>
-          {panelTab === "layers" && (
+          {panelTab === "layers" && (viewMode === "3d" ? (
+            <div className="terrain-3d-panel-note" role="note">
+              <Mountain size={18} aria-hidden="true" />
+              <strong>Exploración 3D</strong>
+              <span>El visor 3D usa su propio estilo cartográfico. Las capas y preferencias del mapa 2D se conservan para cuando vuelvas.</span>
+            </div>
+          ) : (
             <>
           <section className="layer-section" aria-labelledby="base-layers-title">
             <h2 className="eyebrow" id="base-layers-title">MAPAS</h2>
@@ -880,7 +1027,7 @@ export default function App() {
             </section>
           </details>}
             </>
-          )}
+          ))}
 
           {panelTab === "areas" && (areaPanelView === "list" || !selectedElement ? <>
             <DrawnElementsList
@@ -987,11 +1134,14 @@ export default function App() {
 
         <section
           ref={mapStageRef}
-          className={`map-stage${drawingTools.activeTool === "navigate" ? " map-stage--exploring" : ""}`}
+          className={`map-stage${drawingTools.activeTool === "navigate" ? " map-stage--exploring" : ""}${viewMode === "3d" ? " map-stage--3d" : ""}`}
           aria-label="Visor cartográfico"
           onContextMenu={handleStageContextMenu}
         >
           <MapView
+            active={viewMode === "2d"}
+            center={mapCenter}
+            zoom={mapZoom}
             baseMap={baseMap}
             mapRef={mapRef}
             baseLayersRef={baseLayersRef}
@@ -1019,7 +1169,30 @@ export default function App() {
             onCenterChange={handleMapCenterChange}
           />
 
-          <div className="map-tools-cluster">
+          {viewMode === "3d" && (
+            <Suspense fallback={(
+              <div className="terrain-3d-loading" role="status">
+                <LoaderCircle size={18} className="spinner" aria-hidden="true" />
+                <span>Preparando el visor 3D…</span>
+              </div>
+            )}>
+              <Terrain3DView
+                center={terrainCamera?.center ?? mapCenter}
+                zoom={terrainCamera?.zoom ?? Math.max(1, mapZoom - 1)}
+                bearing={terrainCamera?.bearing ?? 0}
+                pitch={terrainCamera?.pitch ?? 58}
+                styleId={terrain3DStyle}
+                exaggeration={terrainExaggeration}
+                theme={theme}
+                navigationRevision={terrainNavigationRevision}
+                onCameraChange={handleTerrainCameraChange}
+                onStyleChange={handleTerrainStyleChange}
+                onExaggerationChange={setTerrainExaggeration}
+              />
+            </Suspense>
+          )}
+
+          {viewMode === "2d" && <div className="map-tools-cluster">
             <DrawingToolbar
               activeTool={drawingTools.activeTool}
               selectedCount={drawingTools.selectedIds.length}
@@ -1039,9 +1212,9 @@ export default function App() {
               inspection={pointInspector.inspection}
               onToggle={togglePointInspector}
             />
-          </div>
+          </div>}
 
-          {drawingTools.traceContextMenu && (
+          {viewMode === "2d" && drawingTools.traceContextMenu && (
             <div
               ref={traceMenuRef}
               className="trace-context-menu"
@@ -1086,7 +1259,7 @@ export default function App() {
             </div>
           )}
 
-          <div className="map-location-chip">
+          <div className={`map-location-chip${viewMode === "3d" ? " map-location-chip--3d" : ""}`}>
             <MapPin size={15} aria-hidden="true" />
             <span>Centro del mapa</span>
             <span className="map-center-coordinates">
@@ -1094,7 +1267,7 @@ export default function App() {
             </span>
           </div>
 
-          <div className="map-controls" aria-label="Controles del mapa">
+          {viewMode === "2d" && <div className="map-controls" aria-label="Controles del mapa">
             <Button
               variant="map"
               size="icon"
@@ -1123,36 +1296,49 @@ export default function App() {
             >
               <MapPin size={17} />
             </Button>
-          </div>
+          </div>}
 
-          {mapStatus.loading && !mapStatus.ready && (
+          {viewMode === "3d" && (
+            <Button
+              variant="map"
+              size="icon"
+              className="terrain-3d-home"
+              aria-label="Volver a Creta"
+              title="Volver a Creta"
+              onClick={resetView}
+            >
+              <MapPin size={17} />
+            </Button>
+          )}
+
+          {viewMode === "2d" && mapStatus.loading && !mapStatus.ready && (
             <div className="map-status map-status--loading" role="status">
               <LoaderCircle size={15} className="spinner" aria-hidden="true" />
               <span>Cargando el mapa…</span>
             </div>
           )}
-          {mapStatus.error && (
+          {viewMode === "2d" && mapStatus.error && (
             <div className="map-status map-status--error" role="alert">
               No se pudieron cargar algunas teselas. Comprueba tu conexión.
             </div>
           )}
-          {selectedVectorBaseMap && selectedVectorStatus === "loading" && (
+          {viewMode === "2d" && selectedVectorBaseMap && selectedVectorStatus === "loading" && (
             <div className="map-status map-status--loading" role="status">
               <LoaderCircle size={15} className="spinner" aria-hidden="true" />
               <span>Cargando el mapa {OPEN_FREE_MAP_STYLES[selectedVectorBaseMap].title.toLowerCase()}…</span>
             </div>
           )}
-          {baseMapNotice && (
+          {viewMode === "2d" && baseMapNotice && (
             <div className="map-status map-status--error" role="status">
               {baseMapNotice}
             </div>
           )}
-          {baseMap === "osm" && qgisStatus === "error" && (
+          {viewMode === "2d" && baseMap === "osm" && qgisStatus === "error" && (
             <div className="map-status map-status--error qgis-unavailable-notice" role="status">
               La cartografía QGIS no está disponible. OpenStreetMap sigue activo.
             </div>
           )}
-          {elevationProfiles.panelOpen && elevationProfiles.activeProfileId && (
+          {viewMode === "2d" && elevationProfiles.panelOpen && elevationProfiles.activeProfileId && (
             <ElevationProfilePanel
               name={drawingTools.elements.find((element) => element.id === elevationProfiles.activeProfileId)?.name ?? "Perfil de elevación"}
               profile={elevationProfiles.profilesById[elevationProfiles.activeProfileId]}
