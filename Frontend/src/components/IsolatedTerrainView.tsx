@@ -5,12 +5,20 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { AlertCircle, Compass, LoaderCircle, Mountain, RefreshCw, RotateCcw, X } from "lucide-react";
 import { formatArea } from "@/lib/geometry-metrics";
 import {
+  buildTerrainWireframeIndices,
   buildTerrainMesh,
   buildTerrainVolumeSupports,
   projectGeometryToTexture,
   type TerrainMeshData,
   type TerrainSupportMeshData,
 } from "@/lib/terrain-model-mesh";
+import {
+  ABSOLUTE_MODEL_ELEVATION_MAX_M,
+  ABSOLUTE_MODEL_ELEVATION_MIN_M,
+  buildTerrainVertexColors,
+  terrainModelLegendStops,
+  type TerrainModelTheme,
+} from "@/lib/terrain-model-styles";
 import { observeTerrainModel, TerrainModelRequestError, type TerrainModelResponse } from "@/lib/terrain-model";
 import "@/components/IsolatedTerrainView.css";
 
@@ -24,18 +32,47 @@ type IsolatedTerrainViewProps = {
 
 type LoadState = { status: "loading" } | { status: "ready"; model: TerrainModelResponse } | { status: "error"; message: string };
 type ModelShape = "surface" | "volume";
+type BoundaryMode = "fill" | "outline" | "hidden";
 
 const MODEL_SHAPE_STORAGE_KEY = "cv-gis-isolated-terrain-shape";
+const MODEL_THEME_STORAGE_KEY = "cv-gis-isolated-terrain-theme";
+const MODEL_BOUNDARY_STORAGE_KEY = "cv-gis-isolated-terrain-boundary";
+const MODEL_WIREFRAME_STORAGE_KEY = "cv-gis-isolated-terrain-wireframe";
+const MODEL_EXAGGERATION_STORAGE_KEY = "cv-gis-isolated-terrain-exaggeration";
 
-function readModelShape(): ModelShape {
+function readChoice<T extends string>(key: string, choices: readonly T[], fallback: T): T {
   try {
-    return window.sessionStorage.getItem(MODEL_SHAPE_STORAGE_KEY) === "surface" ? "surface" : "volume";
+    const stored = window.sessionStorage.getItem(key);
+    return choices.includes(stored as T) ? stored as T : fallback;
   } catch {
-    return "volume";
+    return fallback;
   }
 }
 
+function readSessionBoolean(key: string, fallback: boolean): boolean {
+  try {
+    const stored = window.sessionStorage.getItem(key);
+    return stored === null ? fallback : stored === "true";
+  } catch {
+    return fallback;
+  }
+}
+
+function readSessionExaggeration(): number {
+  try {
+    const stored = Number(window.sessionStorage.getItem(MODEL_EXAGGERATION_STORAGE_KEY));
+    return Number.isFinite(stored) && stored >= 0.5 && stored <= 3 ? stored : 1;
+  } catch {
+    return 1;
+  }
+}
+
+function readModelShape(): ModelShape {
+  return readChoice(MODEL_SHAPE_STORAGE_KEY, ["surface", "volume"], "volume");
+}
+
 const numberFormat = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1 });
+const integerFormat = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0 });
 
 function formatMeters(value: number | null | undefined): string {
   return value === null || value === undefined || !Number.isFinite(value) ? "Sin datos" : `${numberFormat.format(value)} m`;
@@ -51,47 +88,18 @@ function translateWarning(warning: string): string {
   return warning;
 }
 
-function makeElevationColorTexture(model: TerrainModelResponse): THREE.CanvasTexture {
+function drawAlternativeBoundary(
+  canvas: HTMLCanvasElement,
+  model: TerrainModelResponse,
+  mode: BoundaryMode,
+): void {
   const { grid, geometry_local_m: localGeometry } = model;
-  const width = Math.max(64, Math.min(512, grid.columns * 2));
-  const height = Math.max(64, Math.min(512, grid.rows * 2));
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
   const context = canvas.getContext("2d", { alpha: true });
-  if (!context) throw new Error("No se pudo crear la textura del terreno en este navegador.");
+  if (!context) throw new Error("No se pudo crear la superposición del límite.");
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  if (mode === "hidden") return;
 
-  const colors = [
-    [42, 91, 72],
-    [102, 133, 84],
-    [174, 160, 106],
-    [152, 119, 83],
-    [224, 222, 207],
-  ] as const;
-  const low = model.sampled_elevation_range_m?.minimum ?? 0;
-  const high = model.sampled_elevation_range_m?.maximum ?? low;
-  const elevationRange = high - low;
-  const image = context.createImageData(width, height);
-  for (let y = 0; y < height; y += 1) {
-    const row = Math.round((height - 1 - y) / Math.max(1, height - 1) * (grid.rows - 1));
-    for (let x = 0; x < width; x += 1) {
-      const column = Math.round(x / Math.max(1, width - 1) * (grid.columns - 1));
-      const elevation = grid.values_m[row][column];
-      const t = elevation === null || elevationRange === 0 ? 0.5 : Math.max(0, Math.min(1, (elevation - low) / elevationRange));
-      const scaled = t * (colors.length - 1);
-      const start = Math.min(colors.length - 2, Math.floor(scaled));
-      const blend = scaled - start;
-      const color = colors[start].map((value, channel) => Math.round(value + (colors[start + 1][channel] - value) * blend));
-      const offset = (y * width + x) * 4;
-      image.data[offset] = color[0];
-      image.data[offset + 1] = color[1];
-      image.data[offset + 2] = color[2];
-      image.data[offset + 3] = 255;
-    }
-  }
-  context.putImageData(image, 0, 0);
-
-  const polygons = projectGeometryToTexture(localGeometry, grid, width, height);
+  const polygons = projectGeometryToTexture(localGeometry, grid, canvas.width, canvas.height);
   context.lineJoin = "round";
   context.lineCap = "round";
   for (const polygon of polygons) {
@@ -100,14 +108,29 @@ function makeElevationColorTexture(model: TerrainModelResponse): THREE.CanvasTex
       ring.forEach(([x, y], index) => index === 0 ? context.moveTo(x, y) : context.lineTo(x, y));
       context.closePath();
     }
-    context.fillStyle = "rgba(69, 197, 197, 0.3)";
-    context.fill("evenodd");
+    if (mode === "fill") {
+      context.fillStyle = "rgba(69, 197, 197, 0.3)";
+      context.fill("evenodd");
+    }
     context.strokeStyle = "#134f8a";
     context.lineWidth = 2;
     context.stroke();
   }
+}
+
+function makeAlternativeBoundaryTexture(model: TerrainModelResponse, mode: BoundaryMode): THREE.CanvasTexture {
+  const { grid } = model;
+  const width = Math.max(64, Math.min(512, grid.columns * 2));
+  const height = Math.max(64, Math.min(512, grid.rows * 2));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  drawAlternativeBoundary(canvas, model, mode);
 
   const texture = new THREE.CanvasTexture(canvas);
+  // Canvas y=0 is north; default CanvasTexture flipY=true maps it to v=1,
+  // matching the existing north-up mesh UVs and projected alternative rings.
+  texture.flipY = true;
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.wrapS = THREE.ClampToEdgeWrapping;
   texture.wrapT = THREE.ClampToEdgeWrapping;
@@ -137,13 +160,57 @@ function createSupportGeometry(data: TerrainSupportMeshData): THREE.BufferGeomet
   return geometry;
 }
 
+function supportMaterialColors(modelTheme: TerrainModelTheme): { wall: string; base: string } {
+  if (modelTheme === "hillshade") return { wall: "#a1a6a4", base: "#686f70" };
+  return { wall: "#a28d68", base: "#746448" };
+}
+
+function legendGradient(theme: Exclude<TerrainModelTheme, "hillshade">): string {
+  const stops = terrainModelLegendStops(theme).map(({ position, color }) => `${color} ${position}%`).join(", ");
+  return `linear-gradient(90deg, ${stops})`;
+}
+
+function updateTerrainLighting(
+  ambient: THREE.HemisphereLight | null,
+  directional: THREE.DirectionalLight | null,
+  appTheme: "light" | "dark",
+  modelTheme: TerrainModelTheme,
+): void {
+  if (!ambient || !directional) return;
+  if (modelTheme === "hillshade") {
+    ambient.intensity = appTheme === "dark" ? 0.82 : 0.72;
+    directional.intensity = appTheme === "dark" ? 2.05 : 2.25;
+    directional.color.set(appTheme === "dark" ? "#e4e8e7" : "#fff4dc");
+  } else {
+    ambient.intensity = appTheme === "dark" ? 1.35 : 1.45;
+    directional.intensity = 1.85;
+    directional.color.set("#fff4dc");
+  }
+}
+
+function scheduleSceneRender(
+  renderer: THREE.WebGLRenderer | null,
+  scene: THREE.Scene | null,
+  camera: THREE.Camera | null,
+  frameRequest: { current: number | null },
+): void {
+  if (!renderer || !scene || !camera || frameRequest.current !== null) return;
+  frameRequest.current = requestAnimationFrame(() => {
+    frameRequest.current = null;
+    renderer.render(scene, camera);
+  });
+}
+
 export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, theme, onClose }: IsolatedTerrainViewProps) {
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
   const [retryVersion, setRetryVersion] = useState(0);
   const [rendererVersion, setRendererVersion] = useState(0);
   const [rendererError, setRendererError] = useState<string | null>(null);
-  const [exaggeration, setExaggeration] = useState(1);
+  const [exaggeration, setExaggeration] = useState(readSessionExaggeration);
   const [modelShape, setModelShape] = useState<ModelShape>(readModelShape);
+  const [terrainTheme, setTerrainTheme] = useState<TerrainModelTheme>(() => readChoice(MODEL_THEME_STORAGE_KEY, ["natural", "elevation", "hillshade"], "natural"));
+  const [boundaryMode, setBoundaryMode] = useState<BoundaryMode>(() => readChoice(MODEL_BOUNDARY_STORAGE_KEY, ["fill", "outline", "hidden"], "fill"));
+  const [showTriangularMesh, setShowTriangularMesh] = useState(() => readSessionBoolean(MODEL_WIREFRAME_STORAGE_KEY, false));
   const dialogRef = useRef<HTMLDivElement>(null);
   const canvasHostRef = useRef<HTMLDivElement>(null);
   const northIndicatorRef = useRef<HTMLSpanElement>(null);
@@ -152,7 +219,23 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const modelGroupRef = useRef<THREE.Group | null>(null);
   const supportGroupRef = useRef<THREE.Group | null>(null);
+  const surfaceMaterialRef = useRef<THREE.MeshStandardMaterial | null>(null);
+  const boundaryMaterialRef = useRef<THREE.MeshBasicMaterial | null>(null);
+  const supportWallMaterialRef = useRef<THREE.MeshStandardMaterial | null>(null);
+  const supportBaseMaterialRef = useRef<THREE.MeshStandardMaterial | null>(null);
+  const wireframeMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
+  const boundaryTextureRef = useRef<THREE.CanvasTexture | null>(null);
+  const boundaryCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const boundaryMeshRef = useRef<THREE.Mesh | null>(null);
+  const wireframeRef = useRef<THREE.LineSegments | null>(null);
+  const surfaceColorAttributeRef = useRef<THREE.BufferAttribute | null>(null);
   const modelShapeRef = useRef(modelShape);
+  const terrainThemeRef = useRef(terrainTheme);
+  const boundaryModeRef = useRef(boundaryMode);
+  const showTriangularMeshRef = useRef(showTriangularMesh);
+  const exaggerationRef = useRef(exaggeration);
+  const ambientLightRef = useRef<THREE.HemisphereLight | null>(null);
+  const directionalLightRef = useRef<THREE.DirectionalLight | null>(null);
   const resetViewRef = useRef<(() => void) | null>(null);
   const themeRef = useRef(theme);
   const frameRequestRef = useRef<number | null>(null);
@@ -199,15 +282,11 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
   useEffect(() => {
     themeRef.current = theme;
     const scene = sceneRef.current;
-    const camera = cameraRef.current;
     if (scene) scene.background = new THREE.Color(theme === "dark" ? "#0b1b2a" : "#eef2f3");
-    if (frameRequestRef.current === null && rendererRef.current && scene && camera) {
-      frameRequestRef.current = requestAnimationFrame(() => {
-        frameRequestRef.current = null;
-        rendererRef.current?.render(scene, camera);
-      });
-    }
-  }, [theme]);
+    wireframeMaterialRef.current?.color.set(theme === "dark" ? "#d8e0dd" : "#294553");
+    updateTerrainLighting(ambientLightRef.current, directionalLightRef.current, theme, terrainThemeRef.current);
+    scheduleSceneRender(rendererRef.current, scene, cameraRef.current, frameRequestRef);
+  }, [theme, terrainTheme]);
 
   useEffect(() => {
     if (loadState.status !== "ready" || !meshData || meshData.triangleCount === 0 || !canvasHostRef.current) return;
@@ -225,9 +304,9 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
     renderer.domElement.className = "isolated-terrain-canvas";
     canvasHostRef.current.appendChild(renderer.domElement);
 
-    let texture: THREE.CanvasTexture;
+    let boundaryTexture: THREE.CanvasTexture;
     try {
-      texture = makeElevationColorTexture(loadState.model);
+      boundaryTexture = makeAlternativeBoundaryTexture(loadState.model, boundaryModeRef.current);
     } catch {
       renderer.domElement.remove();
       renderer.dispose();
@@ -243,23 +322,93 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
     modelGroupRef.current = terrainGroup;
 
     const surface = createGeometry(meshData);
-    const material = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.88, metalness: 0, side: THREE.FrontSide });
+    const elevationRange = loadState.model.sampled_elevation_range_m;
+    const vertexColors = buildTerrainVertexColors(
+      loadState.model.grid,
+      terrainThemeRef.current,
+      elevationRange?.minimum ?? meshData.minimumElevationM ?? 0,
+      elevationRange?.maximum ?? meshData.maximumElevationM ?? 0,
+    );
+    const colorAttribute = new THREE.BufferAttribute(vertexColors, 3);
+    surface.setAttribute("color", colorAttribute);
+    surfaceColorAttributeRef.current = colorAttribute;
+    const material = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: terrainThemeRef.current === "hillshade" ? 1 : 0.88,
+      metalness: 0,
+      side: THREE.FrontSide,
+    });
+    surfaceMaterialRef.current = material;
     const terrainMesh = new THREE.Mesh(surface, material);
     terrainMesh.name = "Copernicus elevation grid with draped alternative";
     terrainGroup.add(terrainMesh);
 
+    boundaryCanvasRef.current = boundaryTexture.image as HTMLCanvasElement;
+    boundaryTextureRef.current = boundaryTexture;
+    const boundaryMaterial = new THREE.MeshBasicMaterial({
+      map: boundaryTexture,
+      transparent: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+      side: THREE.FrontSide,
+      toneMapped: false,
+    });
+    boundaryMaterialRef.current = boundaryMaterial;
+    const boundaryMesh = new THREE.Mesh(surface, boundaryMaterial);
+    boundaryMesh.name = "Alternative boundary and fill overlay";
+    boundaryMesh.visible = boundaryModeRef.current !== "hidden";
+    boundaryMesh.renderOrder = 2;
+    boundaryMeshRef.current = boundaryMesh;
+    terrainGroup.add(boundaryMesh);
+
+    const wireframeData = buildTerrainWireframeIndices(meshData);
+    let wireframe: THREE.LineSegments | null = null;
+    if (wireframeData.segmentCount > 0) {
+      const normals = surface.getAttribute("normal");
+      const offsetPositions = new Float32Array(meshData.positions.length);
+      const offset = Math.min(loadState.model.grid.sample_spacing_m.east, loadState.model.grid.sample_spacing_m.north) * 0.003;
+      for (let vertex = 0; vertex < offsetPositions.length / 3; vertex += 1) {
+        const offsetIndex = vertex * 3;
+        offsetPositions[offsetIndex] = meshData.positions[offsetIndex] + normals.getX(vertex) * offset;
+        offsetPositions[offsetIndex + 1] = meshData.positions[offsetIndex + 1] + normals.getY(vertex) * offset;
+        offsetPositions[offsetIndex + 2] = meshData.positions[offsetIndex + 2] + normals.getZ(vertex) * offset;
+      }
+      const wireframeGeometry = new THREE.BufferGeometry();
+      wireframeGeometry.setAttribute("position", new THREE.BufferAttribute(offsetPositions, 3));
+      wireframeGeometry.setIndex(new THREE.BufferAttribute(wireframeData.indices, 1));
+      const wireframeMaterial = new THREE.LineBasicMaterial({
+        color: themeRef.current === "dark" ? "#d8e0dd" : "#294553",
+        transparent: true,
+        opacity: 0.48,
+        depthTest: true,
+        depthWrite: false,
+      });
+      wireframeMaterialRef.current = wireframeMaterial;
+      wireframe = new THREE.LineSegments(wireframeGeometry, wireframeMaterial);
+      wireframe.name = "Valid terrain triangulation edges";
+      wireframe.visible = showTriangularMeshRef.current;
+      wireframe.renderOrder = 1;
+      wireframeRef.current = wireframe;
+      terrainGroup.add(wireframe);
+    }
+
     const supportGroup = new THREE.Group();
     supportGroup.name = "Graphic volume supports";
     supportGroup.visible = modelShapeRef.current === "volume";
+    const supportColors = supportMaterialColors(terrainThemeRef.current);
     if (volumeSupportData && volumeSupportData.walls.triangleCount > 0 && volumeSupportData.base.triangleCount > 0) {
       const wallGeometry = createSupportGeometry(volumeSupportData.walls);
-      const wallMaterial = new THREE.MeshStandardMaterial({ color: "#a28d68", roughness: 0.94, metalness: 0 });
+      const wallMaterial = new THREE.MeshStandardMaterial({ color: supportColors.wall, roughness: 0.94, metalness: 0 });
+      supportWallMaterialRef.current = wallMaterial;
       const walls = new THREE.Mesh(wallGeometry, wallMaterial);
       walls.name = "Vertical walls along valid surface boundaries";
       supportGroup.add(walls);
 
       const baseGeometry = createSupportGeometry(volumeSupportData.base);
-      const baseMaterial = new THREE.MeshStandardMaterial({ color: "#746448", roughness: 1, metalness: 0 });
+      const baseMaterial = new THREE.MeshStandardMaterial({ color: supportColors.base, roughness: 1, metalness: 0 });
+      supportBaseMaterialRef.current = baseMaterial;
       const base = new THREE.Mesh(baseGeometry, baseMaterial);
       base.name = "Projected base under valid terrain triangles";
       supportGroup.add(base);
@@ -269,9 +418,11 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
     scene.add(terrainGroup);
 
     const ambient = new THREE.HemisphereLight(0xf2f7f4, 0x66705d, 1.55);
+    ambientLightRef.current = ambient;
     scene.add(ambient);
     const directional = new THREE.DirectionalLight(0xfff4dc, 2.1);
     directional.position.set(-0.65, 1.5, 0.8).multiplyScalar(1200);
+    directionalLightRef.current = directional;
     scene.add(directional);
 
     const host = canvasHostRef.current;
@@ -282,34 +433,34 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
     const spanX = (loadState.model.grid.columns - 1) * gridEast;
     const spanZ = (loadState.model.grid.rows - 1) * gridNorth;
     const baseY = (volumeSupportData?.baseElevationM ?? meshData.minimumElevationM ?? 0) - meshData.referenceElevationM;
+    const minimumSurfaceY = (meshData.minimumElevationM ?? 0) - meshData.referenceElevationM;
     const maximumY = (meshData.maximumElevationM ?? 0) - meshData.referenceElevationM;
-    const targetY = (baseY + maximumY) / 2;
-    const spanY = Math.max(1, maximumY - baseY);
-    const maxSpan = Math.max(spanX, spanZ, spanY, 1);
-    const aspectFit = Math.max(1, height / width);
-    const distance = maxSpan * 0.62 * aspectFit / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-    const initialCameraPosition = new THREE.Vector3(distance * 0.72, targetY + distance * 0.82, distance * 0.92);
-    camera.position.copy(initialCameraPosition);
-    camera.lookAt(0, targetY, 0);
+    const cameraFrame = (shape: ModelShape, verticalExaggeration: number, frameWidth: number, frameHeight: number) => {
+      const lowerY = (shape === "volume" ? baseY : minimumSurfaceY) * verticalExaggeration;
+      const upperY = maximumY * verticalExaggeration;
+      const target = new THREE.Vector3(0, (lowerY + upperY) / 2, 0);
+      const radius = Math.max(1, Math.hypot(spanX / 2, spanZ / 2, (upperY - lowerY) / 2));
+      const aspect = Math.max(0.1, frameWidth / frameHeight);
+      const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+      const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * aspect);
+      const limitingHalfFov = Math.min(verticalFov, horizontalFov) / 2;
+      const distance = radius / Math.sin(limitingHalfFov) * 1.12;
+      const direction = new THREE.Vector3(0.72, 0.82, 0.92).normalize();
+      return { target, position: target.clone().addScaledVector(direction, distance), radius, distance };
+    };
+    const initialFrame = cameraFrame(modelShapeRef.current, exaggerationRef.current, width, height);
+    camera.position.copy(initialFrame.position);
+    camera.lookAt(initialFrame.target);
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(0, targetY, 0);
+    controls.target.copy(initialFrame.target);
     controls.enableDamping = false;
     controls.screenSpacePanning = true;
-    controls.minDistance = Math.max(0.5, maxSpan * 0.18);
-    controls.maxDistance = distance * 7;
+    controls.minDistance = Math.max(0.5, initialFrame.radius * 0.08);
+    controls.maxDistance = initialFrame.distance * 7;
     controls.minPolarAngle = 0.08;
     controls.maxPolarAngle = Math.PI / 2 - 0.02;
     controls.update();
-
-    const resetView = () => {
-      camera.position.copy(initialCameraPosition);
-      controls.target.set(0, targetY, 0);
-      controls.update();
-      camera.lookAt(0, targetY, 0);
-      updateNorth();
-      render();
-    };
 
     const render = () => {
       if (!rendererRef.current || frameRequestRef.current !== null) return;
@@ -317,6 +468,19 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
         frameRequestRef.current = null;
         renderer.render(scene, camera);
       });
+    };
+    const resetView = () => {
+      const nextWidth = Math.max(1, host.clientWidth);
+      const nextHeight = Math.max(1, host.clientHeight);
+      const frame = cameraFrame(modelShapeRef.current, exaggerationRef.current, nextWidth, nextHeight);
+      camera.position.copy(frame.position);
+      controls.target.copy(frame.target);
+      controls.minDistance = Math.max(0.5, frame.radius * 0.08);
+      controls.maxDistance = frame.distance * 7;
+      controls.update();
+      camera.lookAt(frame.target);
+      updateNorth();
+      render();
     };
     const updateNorth = () => {
       const origin = new THREE.Vector3(0, 0, 0).project(camera);
@@ -368,13 +532,19 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
       frameRequestRef.current = null;
       surface.dispose();
       material.dispose();
+      boundaryMaterial.dispose();
+      boundaryTexture.dispose();
+      if (wireframe) {
+        wireframe.geometry.dispose();
+        const wireMaterials = Array.isArray(wireframe.material) ? wireframe.material : [wireframe.material];
+        wireMaterials.forEach((wireMaterial) => wireMaterial.dispose());
+      }
       for (const child of supportGroup.children) {
         if (!(child instanceof THREE.Mesh)) continue;
         child.geometry.dispose();
         const materials = Array.isArray(child.material) ? child.material : [child.material];
         materials.forEach((supportMaterial) => supportMaterial.dispose());
       }
-      texture.dispose();
       terrainGroup.clear();
       scene.clear();
       renderer.dispose();
@@ -384,43 +554,90 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
       cameraRef.current = null;
       modelGroupRef.current = null;
       supportGroupRef.current = null;
+      surfaceMaterialRef.current = null;
+      boundaryMaterialRef.current = null;
+      supportWallMaterialRef.current = null;
+      supportBaseMaterialRef.current = null;
+      wireframeMaterialRef.current = null;
+      boundaryTextureRef.current = null;
+      boundaryCanvasRef.current = null;
+      boundaryMeshRef.current = null;
+      wireframeRef.current = null;
+      surfaceColorAttributeRef.current = null;
+      ambientLightRef.current = null;
+      directionalLightRef.current = null;
       resetViewRef.current = null;
     };
   }, [loadState, meshData, rendererVersion, volumeSupportData]);
 
   useEffect(() => {
     modelShapeRef.current = modelShape;
-    try {
-      window.sessionStorage.setItem(MODEL_SHAPE_STORAGE_KEY, modelShape);
-    } catch {
-      // The current view still works when session storage is unavailable.
-    }
     const supportGroup = supportGroupRef.current;
     if (supportGroup) supportGroup.visible = modelShape === "volume";
-    const renderer = rendererRef.current;
-    const scene = sceneRef.current;
-    const camera = cameraRef.current;
-    if (renderer && scene && camera && frameRequestRef.current === null) {
-      frameRequestRef.current = requestAnimationFrame(() => {
-        frameRequestRef.current = null;
-        renderer.render(scene, camera);
-      });
-    }
+    scheduleSceneRender(rendererRef.current, sceneRef.current, cameraRef.current, frameRequestRef);
   }, [modelShape]);
 
   useEffect(() => {
+    terrainThemeRef.current = terrainTheme;
+    const model = loadState.status === "ready" ? loadState.model : null;
+    const colorAttribute = surfaceColorAttributeRef.current;
+    if (model && colorAttribute) {
+      const range = model.sampled_elevation_range_m;
+      const colors = buildTerrainVertexColors(
+        model.grid,
+        terrainTheme,
+        range?.minimum ?? 0,
+        range?.maximum ?? 0,
+      );
+      (colorAttribute.array as Float32Array).set(colors);
+      colorAttribute.needsUpdate = true;
+    }
+    const material = surfaceMaterialRef.current;
+    if (material) material.roughness = terrainTheme === "hillshade" ? 1 : 0.88;
+    const supportColors = supportMaterialColors(terrainTheme);
+    supportWallMaterialRef.current?.color.set(supportColors.wall);
+    supportBaseMaterialRef.current?.color.set(supportColors.base);
+    updateTerrainLighting(ambientLightRef.current, directionalLightRef.current, themeRef.current, terrainTheme);
+    scheduleSceneRender(rendererRef.current, sceneRef.current, cameraRef.current, frameRequestRef);
+  }, [terrainTheme, loadState]);
+
+  useEffect(() => {
+    boundaryModeRef.current = boundaryMode;
+    const model = loadState.status === "ready" ? loadState.model : null;
+    const canvas = boundaryCanvasRef.current;
+    const texture = boundaryTextureRef.current;
+    if (model && canvas && texture) {
+      drawAlternativeBoundary(canvas, model, boundaryMode);
+      texture.needsUpdate = true;
+    }
+    if (boundaryMeshRef.current) boundaryMeshRef.current.visible = boundaryMode !== "hidden";
+    scheduleSceneRender(rendererRef.current, sceneRef.current, cameraRef.current, frameRequestRef);
+  }, [boundaryMode, loadState]);
+
+  useEffect(() => {
+    showTriangularMeshRef.current = showTriangularMesh;
+    if (wireframeRef.current) wireframeRef.current.visible = showTriangularMesh;
+    scheduleSceneRender(rendererRef.current, sceneRef.current, cameraRef.current, frameRequestRef);
+  }, [showTriangularMesh]);
+
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(MODEL_SHAPE_STORAGE_KEY, modelShape);
+      window.sessionStorage.setItem(MODEL_THEME_STORAGE_KEY, terrainTheme);
+      window.sessionStorage.setItem(MODEL_BOUNDARY_STORAGE_KEY, boundaryMode);
+      window.sessionStorage.setItem(MODEL_WIREFRAME_STORAGE_KEY, String(showTriangularMesh));
+      window.sessionStorage.setItem(MODEL_EXAGGERATION_STORAGE_KEY, String(exaggeration));
+    } catch {
+      // The current view still works when session storage is unavailable.
+    }
+  }, [modelShape, terrainTheme, boundaryMode, showTriangularMesh, exaggeration]);
+
+  useEffect(() => {
+    exaggerationRef.current = exaggeration;
     const group = modelGroupRef.current;
     if (!group) return;
     group.scale.y = exaggeration;
-    const renderer = rendererRef.current;
-    const scene = sceneRef.current;
-    const camera = cameraRef.current;
-    if (renderer && scene && camera && frameRequestRef.current === null) {
-      frameRequestRef.current = requestAnimationFrame(() => {
-        frameRequestRef.current = null;
-        renderer.render(scene, camera);
-      });
-    }
+    scheduleSceneRender(rendererRef.current, sceneRef.current, cameraRef.current, frameRequestRef);
   }, [exaggeration]);
 
   const handleDialogKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -455,6 +672,12 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
   const model = loadState.status === "ready" ? loadState.model : null;
   const surfaceMissing = model && meshData && meshData.triangleCount === 0;
   const coveragePercent = model ? numberFormat.format(model.coverage.valid_sample_fraction * 100) : "0";
+  const elevationTicks = [ABSOLUTE_MODEL_ELEVATION_MIN_M, 0, ABSOLUTE_MODEL_ELEVATION_MAX_M].map((valueM) => ({
+    valueM,
+    position: (valueM - ABSOLUTE_MODEL_ELEVATION_MIN_M)
+      / (ABSOLUTE_MODEL_ELEVATION_MAX_M - ABSOLUTE_MODEL_ELEVATION_MIN_M) * 100,
+    label: `${integerFormat.format(valueM).replace("-", "−")} m`,
+  }));
 
   return (
     <div
@@ -553,7 +776,7 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
             </div>
 
             <div className="isolated-terrain-shape-control" role="group" aria-label="Forma del modelo 3D">
-              <span>Representación</span>
+              <span>FORMA DEL MODELO</span>
               <div className="isolated-terrain-shape-options">
                 <button
                   type="button"
@@ -569,6 +792,71 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
               {modelShape === "volume" && volumeSupportData && (
                 <small>Grosor gráfico: {formatMeters(volumeSupportData.thicknessM)} bajo la cota mínima. No representa profundidad geológica ni volumen real del terreno.</small>
               )}
+            </div>
+
+            <div className="isolated-terrain-theme-control" role="group" aria-label="Representación temática">
+              <span>REPRESENTACIÓN TEMÁTICA</span>
+              <div className="isolated-terrain-theme-options">
+                <button type="button" aria-pressed={terrainTheme === "natural"} onClick={() => setTerrainTheme("natural")}>Relieve natural</button>
+                <button type="button" aria-pressed={terrainTheme === "elevation"} onClick={() => setTerrainTheme("elevation")}>Elevación absoluta</button>
+                <button type="button" aria-pressed={terrainTheme === "hillshade"} onClick={() => setTerrainTheme("hillshade")}>Relieve sombreado</button>
+              </div>
+              <small>{terrainTheme === "natural"
+                ? "Paleta relativa al rango local; un mismo tono puede representar otra cota en otra alternativa."
+                : terrainTheme === "elevation"
+                  ? "Colores fijos por cota en metros; las elevaciones negativas no se clasifican como agua."
+                  : "Iluminación gráfica para percibir el relieve; no representa el sol real ni una fecha y hora."}</small>
+            </div>
+
+            <div className={`isolated-terrain-legend isolated-terrain-legend--${terrainTheme}`} aria-label={`Leyenda: ${terrainTheme === "natural" ? "relieve natural" : terrainTheme === "elevation" ? "elevación absoluta" : "relieve sombreado"}`}>
+              {terrainTheme === "natural" && (
+                <>
+                  <span>Elevación relativa al rango local</span>
+                  <div className="isolated-terrain-legend-bar" style={{ background: legendGradient("natural") }} />
+                  <div className="isolated-terrain-legend-range">
+                    <span>{formatMeters(model?.sampled_elevation_range_m?.minimum)}</span>
+                    <span>{formatMeters(model?.sampled_elevation_range_m?.maximum)}</span>
+                  </div>
+                </>
+              )}
+              {terrainTheme === "elevation" && (
+                <>
+                  <span>Elevación absoluta · metros</span>
+                  <div className="isolated-terrain-absolute-bar-wrap">
+                    <div className="isolated-terrain-legend-bar" style={{ background: legendGradient("elevation") }} />
+                    {elevationTicks.map((tick) => (
+                      <span className="isolated-terrain-absolute-tick" key={tick.valueM} style={{ left: `${tick.position}%` }}>
+                        <i />
+                        <small>{tick.label}</small>
+                      </span>
+                    ))}
+                  </div>
+                  <small>Escala fija: {integerFormat.format(ABSOLUTE_MODEL_ELEVATION_MIN_M)} a {integerFormat.format(ABSOLUTE_MODEL_ELEVATION_MAX_M)} m. Rango de esta cuadrícula: {model?.sampled_elevation_range_m
+                    ? `${formatMeters(model.sampled_elevation_range_m.minimum)} – ${formatMeters(model.sampled_elevation_range_m.maximum)}`
+                    : "sin muestras válidas"}.</small>
+                </>
+              )}
+              {terrainTheme === "hillshade" && (
+                <>
+                  <span>Relieve sombreado</span>
+                  <small>Representación monocromática con luz de escena. No hay una leyenda numérica en este modo.</small>
+                </>
+              )}
+              {model?.coverage.availability === "partial" && <small>Los huecos NoData no reciben color ni triangulación.</small>}
+            </div>
+
+            <div className="isolated-terrain-overlays" role="group" aria-label="Superposiciones">
+              <span>SUPERPOSICIONES</span>
+              <label>Límites de la alternativa</label>
+              <div className="isolated-terrain-boundary-options">
+                <button type="button" aria-pressed={boundaryMode === "fill"} onClick={() => setBoundaryMode("fill")}>Relleno y contorno</button>
+                <button type="button" aria-pressed={boundaryMode === "outline"} onClick={() => setBoundaryMode("outline")}>Solo contorno</button>
+                <button type="button" aria-pressed={boundaryMode === "hidden"} onClick={() => setBoundaryMode("hidden")}>Ocultos</button>
+              </div>
+              <label className="isolated-terrain-wireframe-toggle">
+                <input type="checkbox" checked={showTriangularMesh} onChange={(event) => setShowTriangularMesh(event.target.checked)} />
+                <span>Mostrar malla triangular</span>
+              </label>
             </div>
 
             <div className="isolated-terrain-control">
@@ -618,8 +906,8 @@ export default function IsolatedTerrainView({ areaName, areaAreaM2, analysisId, 
                   <summary>Procedencia y notas</summary>
                   <ul>
                     {model.warnings.map((warning) => <li key={warning}>{translateWarning(warning)}</li>)}
-                    <li>El color muestra el rango de esta cuadrícula rectangular, no las estadísticas zonales del área.</li>
-                    <li>El contorno está rasterizado en una textura de hasta 512 × 512 píxeles y se ajusta a los centros de las muestras.</li>
+                    <li>Los colores son representaciones visuales y no alteran las cotas ni las estadísticas zonales.</li>
+                    <li>Los límites se proyectan sobre una textura de hasta 512 × 512 píxeles; Polygon, huecos y MultiPolygon conservan su geometría local.</li>
                   </ul>
                 </details>
               </>

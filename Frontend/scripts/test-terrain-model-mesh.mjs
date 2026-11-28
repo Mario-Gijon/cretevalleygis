@@ -8,6 +8,19 @@ const javascript = ts.transpileModule(source, {
 }).outputText;
 const meshModule = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 
+const explorationSource = await readFile(new URL("../src/lib/exploration-terrain.ts", import.meta.url), "utf8");
+const explorationJavascript = ts.transpileModule(explorationSource, {
+  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+}).outputText;
+const explorationUrl = `data:text/javascript;base64,${Buffer.from(explorationJavascript).toString("base64")}`;
+const stylesSource = await readFile(new URL("../src/lib/terrain-model-styles.ts", import.meta.url), "utf8");
+const stylesJavascript = ts.transpileModule(stylesSource, {
+  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+}).outputText.replace('"@/lib/exploration-terrain"', JSON.stringify(explorationUrl));
+const stylesModule = await import(`data:text/javascript;base64,${Buffer.from(stylesJavascript).toString("base64")}`);
+const threeTextureSource = await readFile(new URL("../node_modules/three/src/textures/Texture.js", import.meta.url), "utf8");
+const threeCanvasTextureSource = await readFile(new URL("../node_modules/three/src/textures/CanvasTexture.js", import.meta.url), "utf8");
+
 function grid(values, east = 10, north = 10) {
   const rows = values.length;
   const columns = values[0].length;
@@ -274,6 +287,94 @@ test("large volume bases use 32-bit indices while compact walls keep 16-bit indi
   assert.ok(volume.walls.indices instanceof Uint16Array);
   assertValidTriangles(volume.walls);
   assertValidTriangles(volume.base);
+});
+
+test("synthetic north-south and west-east elevation colors align with grid vertices and UVs", () => {
+  const northSouth = grid([[1_000, 1_000], [0, 0]], 10, 20);
+  const northSouthMesh = meshModule.buildTerrainMesh(northSouth);
+  const northSouthColors = stylesModule.buildTerrainVertexColors(northSouth, "elevation", 0, 1_000);
+  assert.ok(vertex(northSouthMesh, 0)[2] < 0, "row 0 is the northern row at negative Z");
+  assert.ok(vertex(northSouthMesh, 2)[2] > 0, "the last row is the southern row at positive Z");
+  assert.deepEqual(Array.from(northSouthColors.slice(0, 3)), Array.from(northSouthColors.slice(3, 6)));
+  assert.deepEqual(Array.from(northSouthColors.slice(6, 9)), Array.from(northSouthColors.slice(9, 12)));
+  assert.notDeepEqual(Array.from(northSouthColors.slice(0, 3)), Array.from(northSouthColors.slice(6, 9)));
+  assert.deepEqual(meshModule.terrainLocalToUv(northSouth, 5, 30), [0, 1]);
+  assert.deepEqual(meshModule.projectGeometryToTexture({
+    type: "Polygon",
+    coordinates: [[[5, 30], [15, 30], [15, 10], [5, 10], [5, 30]]],
+  }, northSouth, 101, 101)[0].rings[0][0], [0, 0]);
+
+  const westEast = grid([[0, 1_000], [0, 1_000]], 10, 20);
+  const westEastMesh = meshModule.buildTerrainMesh(westEast);
+  const westEastColors = stylesModule.buildTerrainVertexColors(westEast, "elevation", 0, 1_000);
+  assert.ok(vertex(westEastMesh, 0)[0] < 0 && vertex(westEastMesh, 1)[0] > 0);
+  assert.notDeepEqual(Array.from(westEastColors.slice(0, 3)), Array.from(westEastColors.slice(3, 6)));
+  assert.deepEqual(meshModule.terrainLocalToUv(westEast, 5, 30), [0, 1]);
+  assert.deepEqual(meshModule.terrainLocalToUv(westEast, 15, 30), [1, 1]);
+});
+
+test("Three.js CanvasTexture inherits the default vertical flip used by north-up UVs", () => {
+  assert.match(threeCanvasTextureSource, /class CanvasTexture extends Texture/);
+  assert.match(threeTextureSource, /this\.flipY\s*=\s*true/);
+  const northUp = grid([[900, 900], [100, 100]]);
+  const mesh = meshModule.buildTerrainMesh(northUp);
+  assert.equal(mesh.uvs[1], 1, "northern row maps to v=1");
+  assert.equal(mesh.uvs[3], 1, "the other northern sample also maps to v=1");
+  assert.ok(vertex(mesh, 0)[2] < vertex(mesh, 2)[2], "the northern row remains physically north");
+});
+
+test("natural adaptive palette handles flat, negative, and zero elevations without NaN", () => {
+  const flat = grid([[-18, -18], [-18, -18]]);
+  const colors = stylesModule.buildTerrainVertexColors(flat, "natural", -18, -18);
+  assert.ok(Array.from(colors).every(Number.isFinite));
+  assert.deepEqual(Array.from(colors.slice(0, 3)), Array.from(colors.slice(3, 6)));
+  assert.equal(stylesModule.terrainModelColorForElevation(0, "natural", 0, 0), stylesModule.terrainModelColorForElevation(0, "natural", 0, 0));
+  assert.equal(stylesModule.terrainModelColorForElevation(-18, "natural", -18, -18), "#ccad75");
+});
+
+test("absolute elevation colors are stable across models and interpolate the fixed land palette", () => {
+  const firstModelColor = stylesModule.terrainModelColorForElevation(375, "elevation", 0, 1_000);
+  const secondModelColor = stylesModule.terrainModelColorForElevation(375, "elevation", 1_200, 2_800);
+  assert.equal(firstModelColor, secondModelColor);
+  assert.equal(firstModelColor, "#9bb16a");
+  assert.equal(stylesModule.terrainModelColorForElevation(0, "elevation", -10, 10), "#367d53");
+  assert.equal(stylesModule.terrainModelColorForElevation(-20_000, "elevation", -20_000, -10_000), "#285b50");
+  assert.equal(stylesModule.terrainModelColorForElevation(20_000, "elevation", 10_000, 20_000), "#523a69");
+  assert.equal(stylesModule.terrainModelLegendStops("elevation")[0].position, 0);
+  assert.equal(stylesModule.terrainModelLegendStops("elevation").at(-1).position, 100);
+});
+
+test("NoData vertices have no thematic color and remain excluded from valid triangles", () => {
+  const input = grid([[0, null], [1_000, 500]]);
+  const data = meshModule.buildTerrainMesh(input);
+  const colors = stylesModule.buildTerrainVertexColors(input, "elevation", 0, 1_000);
+  assert.deepEqual(Array.from(colors.slice(3, 6)), [0, 0, 0]);
+  assert.ok(!Array.from(data.indices).includes(1));
+  assert.equal(data.triangleCount, 1);
+});
+
+test("triangular overlay contains each actual valid triangle edge once and does not mutate the mesh", () => {
+  const data = meshModule.buildTerrainMesh(grid([[1, 2, 3], [4, null, 6], [7, 8, 9]]));
+  const originalPositions = Array.from(data.positions);
+  const originalIndices = Array.from(data.indices);
+  const wireframe = meshModule.buildTerrainWireframeIndices(data);
+  const expectedEdges = new Set();
+  for (let offset = 0; offset < data.indices.length; offset += 3) {
+    for (const [a, b] of [[data.indices[offset], data.indices[offset + 1]], [data.indices[offset + 1], data.indices[offset + 2]], [data.indices[offset + 2], data.indices[offset]]]) {
+      expectedEdges.add(a < b ? `${a}:${b}` : `${b}:${a}`);
+    }
+  }
+  const actualEdges = new Set();
+  for (let offset = 0; offset < wireframe.indices.length; offset += 2) {
+    const a = wireframe.indices[offset];
+    const b = wireframe.indices[offset + 1];
+    assert.ok(a >= 0 && a < data.positions.length / 3 && b >= 0 && b < data.positions.length / 3);
+    actualEdges.add(a < b ? `${a}:${b}` : `${b}:${a}`);
+  }
+  assert.equal(wireframe.segmentCount, expectedEdges.size);
+  assert.deepEqual(actualEdges, expectedEdges);
+  assert.deepEqual(Array.from(data.positions), originalPositions);
+  assert.deepEqual(Array.from(data.indices), originalIndices);
 });
 
 console.log(`terrain mesh checks: ${cases.length} passed`);

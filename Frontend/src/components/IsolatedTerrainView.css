@@ -316,23 +316,30 @@
 
 .isolated-terrain-metric small,
 .isolated-terrain-control small,
-.isolated-terrain-shape-control small {
+.isolated-terrain-shape-control small,
+.isolated-terrain-theme-control small,
+.isolated-terrain-legend small {
   color: var(--muted);
   font-size: 8px;
   line-height: 1.4;
 }
 
-.isolated-terrain-shape-control {
+.isolated-terrain-shape-control,
+.isolated-terrain-theme-control,
+.isolated-terrain-overlays {
   display: grid;
   gap: 7px;
   padding: 10px 2px 12px;
   border-bottom: 1px solid var(--border);
 }
 
-.isolated-terrain-shape-control > span {
+.isolated-terrain-shape-control > span,
+.isolated-terrain-theme-control > span,
+.isolated-terrain-overlays > span {
   color: var(--muted);
   font-size: 9px;
   font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 .isolated-terrain-shape-options {
@@ -372,6 +379,147 @@
 .isolated-terrain-shape-options button:focus-visible {
   outline: 2px solid var(--cv-teal);
   outline-offset: 1px;
+}
+
+.isolated-terrain-theme-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.isolated-terrain-theme-options button,
+.isolated-terrain-boundary-options button {
+  min-width: 0;
+  min-height: 35px;
+  padding: 4px 5px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font: inherit;
+  font-size: 8px;
+  font-weight: 560;
+  line-height: 1.25;
+  cursor: pointer;
+}
+
+.isolated-terrain-theme-options button[aria-pressed="true"],
+.isolated-terrain-boundary-options button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--cv-blue) 38%, var(--border));
+  background: var(--accent-soft);
+  color: var(--cv-blue);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cv-blue) 12%, transparent);
+}
+
+.app-shell[data-theme="dark"] .isolated-terrain-theme-options button[aria-pressed="true"],
+.app-shell[data-theme="dark"] .isolated-terrain-boundary-options button[aria-pressed="true"] {
+  color: #91dedb;
+}
+
+.isolated-terrain-theme-options button:focus-visible,
+.isolated-terrain-boundary-options button:focus-visible,
+.isolated-terrain-wireframe-toggle:focus-within {
+  outline: 2px solid var(--cv-teal);
+  outline-offset: 1px;
+}
+
+.isolated-terrain-legend {
+  display: grid;
+  gap: 6px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-soft);
+}
+
+.isolated-terrain-legend > span,
+.isolated-terrain-overlays > label {
+  color: var(--text);
+  font-size: 8px;
+  font-weight: 600;
+}
+
+.isolated-terrain-legend-bar {
+  height: 9px;
+  border: 1px solid rgb(5 41 76 / 12%);
+  border-radius: 5px;
+}
+
+.isolated-terrain-legend-range {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.isolated-terrain-absolute-bar-wrap {
+  position: relative;
+  padding-bottom: 21px;
+}
+
+.isolated-terrain-absolute-tick {
+  position: absolute;
+  top: 0;
+  display: grid;
+  justify-items: center;
+  color: var(--muted);
+  font-size: 7px;
+  font-variant-numeric: tabular-nums;
+  transform: translateX(-50%);
+}
+
+.isolated-terrain-absolute-tick:first-of-type {
+  transform: none;
+}
+
+.isolated-terrain-absolute-tick:last-of-type {
+  transform: translateX(-100%);
+}
+
+.isolated-terrain-absolute-tick i {
+  display: block;
+  width: 1px;
+  height: 4px;
+  background: var(--muted);
+}
+
+.isolated-terrain-absolute-tick small {
+  margin-top: 3px;
+  white-space: nowrap;
+}
+
+.isolated-terrain-overlays {
+  border-bottom: 1px solid var(--border);
+}
+
+.isolated-terrain-boundary-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.isolated-terrain-boundary-options button {
+  min-height: 32px;
+  padding-inline: 3px;
+}
+
+.isolated-terrain-wireframe-toggle {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+  font-size: 8px;
+  cursor: pointer;
+}
+
+.isolated-terrain-wireframe-toggle input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--cv-blue);
 }
 
 .isolated-terrain-control {
@@ -551,6 +699,9 @@
 
   .isolated-terrain-metric--primary,
   .isolated-terrain-shape-control,
+  .isolated-terrain-theme-control,
+  .isolated-terrain-legend,
+  .isolated-terrain-overlays,
   .isolated-terrain-control,
   .isolated-terrain-data-list,
   .isolated-terrain-coverage,

@@ -28,6 +28,11 @@ export type TerrainVolumeSupportData = {
   baseElevationM: number | null;
 };
 
+export type TerrainWireframeData = {
+  indices: Uint16Array | Uint32Array;
+  segmentCount: number;
+};
+
 export type TexturePolygon = {
   rings: Array<Array<[number, number]>>;
 };
@@ -144,6 +149,23 @@ export function buildTerrainMesh(grid: TerrainGrid): TerrainMeshData {
     minimumElevationM,
     maximumElevationM,
     sampleCenterBounds: { west: frame.west, south: frame.south, east: frame.east, north: frame.north },
+  };
+}
+
+/** Returns each unique edge used by an actual valid surface triangle once. */
+export function buildTerrainWireframeIndices(surface: TerrainMeshData): TerrainWireframeData {
+  const edges = new Map<string, [number, number]>();
+  for (let offset = 0; offset + 2 < surface.indices.length; offset += 3) {
+    const triangle = [surface.indices[offset], surface.indices[offset + 1], surface.indices[offset + 2]];
+    for (const [a, b] of [[triangle[0], triangle[1]], [triangle[1], triangle[2]], [triangle[2], triangle[0]]] as const) {
+      const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+      if (!edges.has(key)) edges.set(key, [a, b]);
+    }
+  }
+  const indices = Array.from(edges.values()).flat();
+  return {
+    indices: toIndexArray(indices, surface.positions.length / 3),
+    segmentCount: indices.length / 2,
   };
 }
 
