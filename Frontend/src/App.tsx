@@ -45,6 +45,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useDrawingTools } from "@/hooks/useDrawingTools";
 import { useElevationProfiles } from "@/hooks/useElevationProfiles";
+import { useGeometryBuffer } from "@/hooks/useGeometryBuffer";
 import { usePointInspector } from "@/hooks/usePointInspector";
 import { usePlaceSearchMarker } from "@/hooks/usePlaceSearchMarker";
 import { useTerrainAnalysis } from "@/hooks/useTerrainAnalysis";
@@ -152,6 +153,7 @@ export default function App() {
   const baseLayersRef = useRef<BaseMapLayers | null>(null);
   const drawingTools = useDrawingTools();
   const elevationProfiles = useElevationProfiles();
+  const geometryBuffer = useGeometryBuffer();
   const pointInspector = usePointInspector();
   const placeSearchMarker = usePlaceSearchMarker();
   const terrainAnalysis = useTerrainAnalysis();
@@ -208,6 +210,14 @@ export default function App() {
       geometryRevision,
     })));
   }, [drawingTools.elements, elevationProfiles.syncElements]);
+
+  useEffect(() => {
+    geometryBuffer.syncElements(drawingTools.elements.map(({ id, geometryType, geometryRevision }) => ({
+      id,
+      geometryType,
+      geometryRevision,
+    })));
+  }, [drawingTools.elements, geometryBuffer.syncElements]);
 
   const handleMapStatus = useCallback((status: MapStatus) => {
     setMapStatus(status);
@@ -838,6 +848,11 @@ export default function App() {
             element={selectedElement}
             analysis={terrainAnalysis.analyses[selectedElement.id]}
             elevationProfile={elevationProfiles.profilesById[selectedElement.id]}
+            bufferState={geometryBuffer.bufferState?.sourceId === selectedElement.id
+              && geometryBuffer.bufferState.geometryRevision === selectedElement.geometryRevision
+              ? geometryBuffer.bufferState
+              : null}
+            bufferGeometry={selectedElement.geoJsonPoint ?? selectedElement.geoJsonLineString ?? selectedElement.geoJsonGeometry}
             batchBusy={terrainAnalysis.batchState?.phase === "running" || terrainAnalysis.batchState?.phase === "stopping"}
             onBackToList={() => setAreaPanelView("list")}
             onAnalyzeArea={() => {
@@ -860,6 +875,26 @@ export default function App() {
               );
             }}
             onCancelProfile={() => elevationProfiles.cancelProfile(selectedElement.id)}
+            onGenerateBuffer={(distanceMeters) => {
+              const geometry = selectedElement.geoJsonPoint ?? selectedElement.geoJsonLineString ?? selectedElement.geoJsonGeometry;
+              if (!geometry) return;
+              void geometryBuffer.generatePreview(
+                selectedElement.id,
+                selectedElement.geometryRevision,
+                geometry,
+                distanceMeters,
+              );
+            }}
+            onConfirmBuffer={(name) => {
+              const generatedPolygon = geometryBuffer.getConfirmablePolygon(
+                selectedElement.id,
+                selectedElement.geometryRevision,
+              );
+              if (!generatedPolygon) return;
+              const id = drawingTools.addPolygonFromGeoJSON(generatedPolygon, name);
+              if (id) geometryBuffer.clearPreview();
+            }}
+            onCancelBuffer={geometryBuffer.clearPreview}
           />)}
           </div>
 
@@ -906,6 +941,7 @@ export default function App() {
             pointInspectorLayer={pointInspector.layer}
             placeSearchMarkerLayer={placeSearchMarker.layer}
             elevationProfileMarkerLayer={elevationProfiles.markerLayer}
+            geometryBufferPreviewLayer={geometryBuffer.previewLayer}
             explorationTerrainEnabled={explorationTerrainEnabled}
             explorationTerrainOpacity={explorationTerrainOpacity}
             explorationTerrainTheme={explorationTerrainTheme}

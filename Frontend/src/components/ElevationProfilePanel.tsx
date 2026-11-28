@@ -221,7 +221,11 @@ export function ElevationProfilePanel({ name, profile, onClose, onCancel, onSamp
             <div><dt>Inicio · final</dt><dd>{formatElevation(stats.initialElevationMeters)} · {formatElevation(stats.finalElevationMeters)}</dd></div>
             <div><dt>Mín. · máx.</dt><dd>{formatElevation(stats.minimumElevationMeters)} · {formatElevation(stats.maximumElevationMeters)}</dd></div>
             <div><dt>Media · relieve</dt><dd>{formatElevation(stats.meanElevationMeters)} · {formatElevation(stats.maximumReliefMeters)}</dd></div>
-            <div><dt>Ascenso · descenso</dt><dd>+{formatDistance(stats.cumulativeAscentMeters)} · −{formatDistance(stats.cumulativeDescentMeters)}</dd></div>
+            <div><dt>Ascenso · descenso</dt><dd>
+              {stats.cumulativeAscentMeters === null ? "—" : `+${formatDistance(stats.cumulativeAscentMeters)}`}
+              {" · "}
+              {stats.cumulativeDescentMeters === null ? "—" : `−${formatDistance(stats.cumulativeDescentMeters)}`}
+            </dd></div>
             <div><dt>Cobertura</dt><dd>{formatPercent(stats.coveragePercent)} · {stats.validSampleCount}/{stats.totalSampleCount}</dd></div>
           </dl>
           <ProfileChart samples={result.samples} totalDistanceMeters={stats.totalDistanceMeters} onSampleHover={onSampleHover} />

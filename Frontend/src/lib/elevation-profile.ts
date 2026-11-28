@@ -19,8 +19,8 @@ export type ElevationProfileStatistics = {
   maximumElevationMeters: number | null;
   meanElevationMeters: number | null;
   maximumReliefMeters: number | null;
-  cumulativeAscentMeters: number;
-  cumulativeDescentMeters: number;
+  cumulativeAscentMeters: number | null;
+  cumulativeDescentMeters: number | null;
   validSampleCount: number;
   totalSampleCount: number;
   coveragePercent: number;
@@ -188,6 +188,7 @@ export function calculateElevationProfileStatistics(
 
   let ascent = 0;
   let descent = 0;
+  let validIntervalCount = 0;
   let weightedElevation = 0;
   let coveredDistance = 0;
   for (let index = 1; index < samples.length; index += 1) {
@@ -195,6 +196,7 @@ export function calculateElevationProfileStatistics(
     const current = samples[index];
     if (previous.elevationMeters === null || current.elevationMeters === null) continue;
     const difference = current.elevationMeters - previous.elevationMeters;
+    validIntervalCount += 1;
     if (difference > 0) ascent += difference;
     else descent += Math.abs(difference);
     const distance = Math.max(0, current.distanceMeters - previous.distanceMeters);
@@ -218,8 +220,8 @@ export function calculateElevationProfileStatistics(
     maximumReliefMeters: minimumElevationMeters === null || maximumElevationMeters === null
       ? null
       : maximumElevationMeters - minimumElevationMeters,
-    cumulativeAscentMeters: ascent,
-    cumulativeDescentMeters: descent,
+    cumulativeAscentMeters: validIntervalCount ? ascent : null,
+    cumulativeDescentMeters: validIntervalCount ? descent : null,
     validSampleCount: valid.length,
     totalSampleCount: samples.length,
     coveragePercent: samples.length ? (valid.length / samples.length) * 100 : 0,

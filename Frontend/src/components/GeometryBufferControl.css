@@ -1,0 +1,118 @@
+.geometry-buffer-control {
+  display: grid;
+  gap: 7px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.geometry-buffer-control h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.geometry-buffer-control h3 svg {
+  color: var(--cv-blue);
+}
+
+.app-shell[data-theme="dark"] .geometry-buffer-control h3 svg {
+  color: #77d2d0;
+}
+
+.geometry-buffer-distance-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px 58px;
+  align-items: center;
+  gap: 6px;
+}
+
+.geometry-buffer-distance-row label,
+.geometry-buffer-name-label {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.geometry-buffer-distance-row input,
+.geometry-buffer-distance-row select,
+.geometry-buffer-name {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 10px;
+}
+
+.geometry-buffer-distance-row input:focus-visible,
+.geometry-buffer-distance-row select:focus-visible,
+.geometry-buffer-name:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--cv-teal) 60%, transparent);
+  outline-offset: 1px;
+  border-color: var(--cv-teal);
+}
+
+.geometry-buffer-name-label {
+  margin-top: 1px;
+}
+
+.geometry-buffer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.geometry-buffer-actions button {
+  min-height: 31px;
+  font-size: 9px;
+}
+
+.geometry-buffer-actions .ui-button--primary {
+  background: var(--cv-blue);
+}
+
+.geometry-buffer-preview-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  color: var(--cv-blue);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.app-shell[data-theme="dark"] .geometry-buffer-preview-summary {
+  color: #8dd7d3;
+}
+
+.geometry-buffer-message {
+  margin: 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.geometry-buffer-message--error {
+  color: #a7372e;
+}
+
+.app-shell[data-theme="dark"] .geometry-buffer-message--error {
+  color: #ffaaa3;
+}
+
+@media (max-width: 420px) {
+  .geometry-buffer-distance-row {
+    grid-template-columns: minmax(0, 1fr) 82px 54px;
+    gap: 4px;
+  }
+
+  .geometry-buffer-actions button {
+    min-height: 36px;
+  }
+}

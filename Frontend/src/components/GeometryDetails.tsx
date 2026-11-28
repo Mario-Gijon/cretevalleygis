@@ -3,6 +3,8 @@ import { Activity, ArrowLeft, LoaderCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { SelectedElementInfo } from "@/hooks/useDrawingTools";
 import type { ElevationProfileState } from "@/hooks/useElevationProfiles";
+import type { BufferInputGeometry, GeometryBufferState } from "@/hooks/useGeometryBuffer";
+import { GeometryBufferControl } from "@/components/GeometryBufferControl";
 import { TerrainAnalysisPanel } from "@/components/TerrainAnalysisPanel";
 import type { AreaAnalysisState } from "@/lib/terrain-analysis";
 import { formatArea, formatCoordinate, formatDistance } from "@/lib/geometry-metrics";
@@ -12,15 +14,20 @@ type GeometryDetailsProps = {
   analysis?: AreaAnalysisState;
   batchBusy?: boolean;
   elevationProfile?: ElevationProfileState;
+  bufferState?: GeometryBufferState | null;
+  bufferGeometry?: BufferInputGeometry;
   onBackToList: () => void;
   onAnalyzeArea: () => void;
   onResumeAnalysis: () => void;
   onRename: (id: string, name: string) => void;
   onGenerateProfile: () => void;
   onCancelProfile: () => void;
+  onGenerateBuffer: (distanceMeters: number) => void;
+  onConfirmBuffer: (name: string) => void;
+  onCancelBuffer: () => void;
 };
 
-export function GeometryDetails({ element, analysis, batchBusy = false, elevationProfile, onBackToList, onAnalyzeArea, onResumeAnalysis, onRename, onGenerateProfile, onCancelProfile }: GeometryDetailsProps) {
+export function GeometryDetails({ element, analysis, batchBusy = false, elevationProfile, bufferState, bufferGeometry, onBackToList, onAnalyzeArea, onResumeAnalysis, onRename, onGenerateProfile, onCancelProfile, onGenerateBuffer, onConfirmBuffer, onCancelBuffer }: GeometryDetailsProps) {
   const [name, setName] = useState(element?.name ?? "");
 
   useEffect(() => setName(element?.name ?? ""), [element?.id, element?.name]);
@@ -75,6 +82,16 @@ export function GeometryDetails({ element, analysis, batchBusy = false, elevatio
           </>
         )}
       </dl>
+      {bufferGeometry && (
+        <GeometryBufferControl
+          key={`${element.id}-${element.geometryRevision}`}
+          sourceName={element.name}
+          state={bufferState}
+          onGenerate={onGenerateBuffer}
+          onConfirm={onConfirmBuffer}
+          onCancel={onCancelBuffer}
+        />
+      )}
       {value.kind === "LineString" && element.geoJsonLineString && (
         <section className="geometry-profile-action" aria-label="Perfil de elevación">
           <Button

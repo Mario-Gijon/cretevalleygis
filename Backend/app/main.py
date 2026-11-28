@@ -33,6 +33,12 @@ from terrain_derivative_config import DERIVATIVE_STYLE_VERSION
 from terrain_style_config import REGIONAL_ELEVATION_STYLE_VERSION, regional_elevation_style
 from app.zonal_statistics import SCHEMA_VERSION as ZONAL_STATISTICS_SCHEMA_VERSION
 from app.zonal_statistics import calculate_zonal_terrain_statistics, geometry_bbox_wgs84
+from app.geometry_operations import (
+    MAX_BUFFER_DISTANCE_M,
+    GeometryEngineUnavailable,
+    GeometryOperationError,
+    create_buffer,
+)
 from app.place_search import PlaceSearchUnavailable, SOURCE_LABEL as PLACE_SEARCH_SOURCE, search_places
 
 
@@ -100,6 +106,13 @@ class TerrainAnalysisRequest(BaseModel):
         bbox = geometry_bbox_wgs84(value)
         selected_tiles(tuple(round(coordinate, 8) for coordinate in bbox))
         return value
+
+
+class GeometryBufferRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    geometry: dict[str, Any]
+    distance_m: float = Field(gt=0, le=MAX_BUFFER_DISTANCE_M)
 
 
 @dataclass
@@ -1058,6 +1071,23 @@ def search_place_endpoint(q: str = Query(min_length=2, max_length=80)) -> dict[s
             detail="The local Natural Earth place catalog is unavailable.",
         ) from error
     return {"query": query, "source": PLACE_SEARCH_SOURCE, "results": results}
+
+
+@app.post("/api/geometry/buffer")
+def create_geometry_buffer_endpoint(request: GeometryBufferRequest) -> dict[str, Any]:
+    try:
+        return create_buffer(request.geometry, request.distance_m)
+    except GeometryEngineUnavailable as error:
+        logger.error("The local geometry engine is unavailable: %s", error)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="El motor geométrico no está disponible en este momento.",
+        ) from error
+    except GeometryOperationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(error),
+        ) from error
 
 
 @app.post("/api/terrain/jobs")
