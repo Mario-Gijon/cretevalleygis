@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 import subprocess
 import threading
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, HTTPException, Query, status
@@ -38,6 +38,7 @@ from app.geometry_operations import (
     GeometryEngineUnavailable,
     GeometryOperationError,
     create_buffer,
+    create_overlay,
 )
 from app.place_search import PlaceSearchUnavailable, SOURCE_LABEL as PLACE_SEARCH_SOURCE, search_places
 
@@ -113,6 +114,14 @@ class GeometryBufferRequest(BaseModel):
 
     geometry: dict[str, Any]
     distance_m: float = Field(gt=0, le=MAX_BUFFER_DISTANCE_M)
+
+
+class GeometryOverlayRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    operation: Literal["union", "intersection", "difference"]
+    geometry_a: dict[str, Any]
+    geometry_b: dict[str, Any]
 
 
 @dataclass
@@ -1077,6 +1086,23 @@ def search_place_endpoint(q: str = Query(min_length=2, max_length=80)) -> dict[s
 def create_geometry_buffer_endpoint(request: GeometryBufferRequest) -> dict[str, Any]:
     try:
         return create_buffer(request.geometry, request.distance_m)
+    except GeometryEngineUnavailable as error:
+        logger.error("The local geometry engine is unavailable: %s", error)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="El motor geométrico no está disponible en este momento.",
+        ) from error
+    except GeometryOperationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(error),
+        ) from error
+
+
+@app.post("/api/geometry/overlay")
+def create_geometry_overlay_endpoint(request: GeometryOverlayRequest) -> dict[str, Any]:
+    try:
+        return create_overlay(request.operation, request.geometry_a, request.geometry_b)
     except GeometryEngineUnavailable as error:
         logger.error("The local geometry engine is unavailable: %s", error)
         raise HTTPException(

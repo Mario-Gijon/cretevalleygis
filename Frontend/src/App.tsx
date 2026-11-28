@@ -36,6 +36,7 @@ import {
 } from "@/lib/base-maps";
 import { DrawnElementsList } from "@/components/DrawnElementsList";
 import { GeometryDetails } from "@/components/GeometryDetails";
+import { GeometryOperationsPanel } from "@/components/GeometryOperationsPanel";
 import { ElevationProfilePanel } from "@/components/ElevationProfilePanel";
 import { ObjectiveAreaComparison } from "@/components/ObjectiveAreaComparison";
 import { DrawingToolbar } from "@/components/DrawingToolbar";
@@ -46,6 +47,7 @@ import { Switch } from "@/components/ui/switch";
 import { useDrawingTools } from "@/hooks/useDrawingTools";
 import { useElevationProfiles } from "@/hooks/useElevationProfiles";
 import { useGeometryBuffer } from "@/hooks/useGeometryBuffer";
+import { useGeometryOperations } from "@/hooks/useGeometryOperations";
 import { usePointInspector } from "@/hooks/usePointInspector";
 import { usePlaceSearchMarker } from "@/hooks/usePlaceSearchMarker";
 import { useTerrainAnalysis } from "@/hooks/useTerrainAnalysis";
@@ -155,6 +157,7 @@ export default function App() {
   const drawingTools = useDrawingTools();
   const elevationProfiles = useElevationProfiles();
   const geometryBuffer = useGeometryBuffer();
+  const geometryOperations = useGeometryOperations();
   const pointInspector = usePointInspector();
   const placeSearchMarker = usePlaceSearchMarker();
   const terrainAnalysis = useTerrainAnalysis();
@@ -165,6 +168,7 @@ export default function App() {
   const [panelTab, setPanelTab] = useState<PanelTab>("layers");
   const [areaPanelView, setAreaPanelView] = useState<AreaPanelView>("list");
   const [comparisonOpen, setComparisonOpen] = useState(false);
+  const [geometryOperationsOpen, setGeometryOperationsOpen] = useState(false);
   const [comparisonAreaIds, setComparisonAreaIds] = useState<string[] | null>(null);
   const [comparisonCriterionIds, setComparisonCriterionIds] = useState(() => OBJECTIVE_CRITERIA.map((criterion) => criterion.id));
   const [panelWidth, setPanelWidth] = useState(300);
@@ -219,6 +223,10 @@ export default function App() {
       geometryRevision,
     })));
   }, [drawingTools.elements, geometryBuffer.syncElements]);
+
+  useEffect(() => {
+    geometryOperations.syncAreas(drawingTools.elements);
+  }, [drawingTools.elements, geometryOperations.syncAreas]);
 
   const handleMapStatus = useCallback((status: MapStatus) => {
     setMapStatus(status);
@@ -433,6 +441,35 @@ export default function App() {
     setComparisonOpen(true);
   };
 
+  const openGeometryOperations = () => {
+    geometryOperations.clearPreview();
+    setPanelTab("areas");
+    setAreaPanelView("list");
+    setPanelOpen(true);
+    setGeometryOperationsOpen(true);
+  };
+
+  const generateGeometryOperationPreview = (operation: Parameters<typeof geometryOperations.generatePreview>[0], areaAId: string, areaBId: string) => {
+    void geometryOperations.generatePreview(
+      operation,
+      drawingTools.elements.find((element) => element.id === areaAId),
+      drawingTools.elements.find((element) => element.id === areaBId),
+    );
+  };
+
+  const confirmGeometryOperation = (
+    operation: Parameters<typeof geometryOperations.getConfirmableResult>[0],
+    areaAId: string,
+    areaBId: string,
+    name: string,
+  ) => {
+    const result = geometryOperations.getConfirmableResult(operation, areaAId, areaBId);
+    if (!result) return;
+    geometryOperations.clearPreview();
+    const id = drawingTools.addSurfaceGeometryFromGeoJSON(result, name);
+    if (id) setGeometryOperationsOpen(false);
+  };
+
   const renderBaseMapOption = (option: { id: BaseMapId; title: string; description: string }) => {
     const terrain = isTerrainBaseMap(option.id);
     const selected = baseMap === option.id;
@@ -474,7 +511,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!selectedElement) return;
+    if (!selectedElement || geometryOperationsOpen) return;
     setPanelTab("areas");
     setAreaPanelView("detail");
     setPanelOpen(true);
@@ -501,6 +538,10 @@ export default function App() {
   };
 
   const openAreaDetails = (id: string) => {
+    if (geometryOperationsOpen) {
+      geometryOperations.clearPreview();
+      setGeometryOperationsOpen(false);
+    }
     setPanelTab("areas");
     setAreaPanelView("detail");
     setPanelOpen(true);
@@ -841,14 +882,28 @@ export default function App() {
             </>
           )}
 
-          {panelTab === "areas" && (areaPanelView === "list" || !selectedElement ? <DrawnElementsList
-            elements={drawingTools.elements}
-            selectedIds={drawingTools.selectedIds}
-            onFocus={openAreaDetails}
-            onRename={drawingTools.renameElement}
-            onDelete={drawingTools.deleteElement}
-            onCompare={openAreaComparison}
-          /> : <GeometryDetails
+          {panelTab === "areas" && (areaPanelView === "list" || !selectedElement ? <>
+            <DrawnElementsList
+              elements={drawingTools.elements}
+              selectedIds={drawingTools.selectedIds}
+              onFocus={openAreaDetails}
+              onRename={drawingTools.renameElement}
+              onDelete={drawingTools.deleteElement}
+              onCompare={openAreaComparison}
+              onGeometryOperations={openGeometryOperations}
+            />
+            {geometryOperationsOpen && <GeometryOperationsPanel
+              areas={areaElements}
+              preview={geometryOperations.preview}
+              onGeneratePreview={generateGeometryOperationPreview}
+              onConfirm={confirmGeometryOperation}
+              onClearPreview={geometryOperations.clearPreview}
+              onClose={() => {
+                geometryOperations.clearPreview();
+                setGeometryOperationsOpen(false);
+              }}
+            />}
+          </> : <GeometryDetails
             element={selectedElement}
             analysis={terrainAnalysis.analyses[selectedElement.id]}
             elevationProfile={elevationProfiles.profilesById[selectedElement.id]}
@@ -946,6 +1001,7 @@ export default function App() {
             placeSearchMarkerLayer={placeSearchMarker.layer}
             elevationProfileMarkerLayer={elevationProfiles.markerLayer}
             geometryBufferPreviewLayer={geometryBuffer.previewLayer}
+            geometryOperationPreviewLayer={geometryOperations.previewLayer}
             explorationTerrainEnabled={explorationTerrainEnabled}
             explorationTerrainOpacity={explorationTerrainOpacity}
             explorationTerrainTheme={explorationTerrainTheme}

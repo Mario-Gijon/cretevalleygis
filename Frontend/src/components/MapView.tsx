@@ -290,6 +290,7 @@ type MapViewProps = {
   placeSearchMarkerLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
   elevationProfileMarkerLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
   geometryBufferPreviewLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
+  geometryOperationPreviewLayer: VectorLayer<VectorSource<Feature<Geometry>>>;
   explorationTerrainEnabled: boolean;
   explorationTerrainOpacity: number;
   explorationTerrainTheme: ExplorationTerrainTheme;
@@ -322,6 +323,7 @@ export default function MapView({
   placeSearchMarkerLayer,
   elevationProfileMarkerLayer,
   geometryBufferPreviewLayer,
+  geometryOperationPreviewLayer,
   explorationTerrainEnabled,
   explorationTerrainOpacity,
   explorationTerrainTheme,
@@ -466,6 +468,7 @@ export default function MapView({
         placeSearchMarkerLayer,
         elevationProfileMarkerLayer,
         geometryBufferPreviewLayer,
+        geometryOperationPreviewLayer,
       ],
       controls: defaultControls({
         attribution: false,
@@ -879,7 +882,7 @@ export default function MapView({
       updateExplorationRef.current = null;
       scheduleElevationScaleRef.current = null;
     };
-  }, [baseLayersRef, drawingsLayer, mapRef, measurementsLayer, pointInspectorLayer, placeSearchMarkerLayer, elevationProfileMarkerLayer, geometryBufferPreviewLayer, onCenterChange, onMapReady, onOverlayAvailabilityChange, onQgisStatusChange, onStatusChange]);
+  }, [baseLayersRef, drawingsLayer, mapRef, measurementsLayer, pointInspectorLayer, placeSearchMarkerLayer, elevationProfileMarkerLayer, geometryBufferPreviewLayer, geometryOperationPreviewLayer, onCenterChange, onMapReady, onOverlayAvailabilityChange, onQgisStatusChange, onStatusChange]);
 
   useEffect(() => {
     const view = mapRef.current?.getView();

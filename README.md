@@ -284,6 +284,14 @@ El backend elige el CRS UTM local con `QGIS/scripts/terrain_request.py`, transfo
 
 La ficha de puntos, líneas y áreas permite solicitar una vista previa desde el backend, introducir metros o kilómetros y asignar nombre al área. Confirmar incorpora un nuevo `Polygon` o `MultiPolygon` como un elemento independiente en la capa de dibujos; conserva todos sus componentes y anillos, y el resultado puede analizarse y compararse como una sola área. Cambiar o eliminar la geometría de origen invalida una solicitud o vista previa pendiente.
 
+## Operaciones geométricas entre áreas
+
+`POST /api/geometry/overlay` recibe `{"operation":"union|intersection|difference","geometry_a":<Polygon|MultiPolygon WGS84>,"geometry_b":<Polygon|MultiPolygon WGS84>}`. El backend valida ambas entradas y las proyecta juntas a un único CRS UTM métrico elegido por la extensión combinada antes de ejecutar OGR/GEOS. La extensión conjunta se limita a 4° por lado; cada entrada mantiene el límite de 10.000 vértices y los resultados se limitan a 50.000 vértices y 500 km de extensión métrica. No se reparan ni simplifican silenciosamente las geometrías.
+
+La unión conserva la superficie de ambas áreas, la intersección conserva la superficie compartida y la diferencia calcula A menos B, respetando ese orden. Se devuelven todos los `Polygon`/`MultiPolygon` y sus huecos. Una intersección que solo toca un borde o vértice, o una diferencia sin superficie restante, devuelve `result_status: "empty"` y `geometry: null`; los componentes lineales o puntuales de una colección se informan como advertencias y nunca se convierten en áreas.
+
+En la lista **Áreas**, **Operaciones geométricas** abre un panel no modal que deja el mapa navegable. Elegir los operandos u operación no hace peticiones: el backend se consulta al pedir la vista previa. Confirmarla añade un área independiente sin copiar análisis; editar o eliminar cualquiera de las áreas de origen invalida el resultado pendiente.
+
 ## Áreas compuestas
 
 `Polygon` y `MultiPolygon` son geometrías de superficie bajo el mismo concepto funcional de área. La interfaz conserva el tipo GeoJSON real y representa una geometría compuesta con una sola identidad, nombre, selección, ficha y columna de criterios. Sus medidas geodésicas suman todos los componentes, descuentan los anillos interiores de la superficie y cuentan los vértices sin duplicar los cierres de anillo.

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Ellipsis, MapPin, Pencil, Pentagon, Route, Scale, Trash2, X } from "lucide-react";
+import { Check, Ellipsis, GitCompareArrows, MapPin, Pencil, Pentagon, Route, Scale, Trash2, X } from "lucide-react";
 import type { DrawnElement } from "@/hooks/useDrawingTools";
 import { formatArea, formatCoordinate, formatDistance } from "@/lib/geometry-metrics";
 import { isSurfaceGeometryType } from "@/lib/geometry-types";
@@ -11,6 +11,7 @@ type DrawnElementsListProps = {
   onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
   onCompare: () => void;
+  onGeometryOperations: () => void;
 };
 
 const geometryLabels = {
@@ -20,7 +21,7 @@ const geometryLabels = {
   MultiPolygon: "Área compuesta",
 } as const;
 
-export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, onDelete, onCompare }: DrawnElementsListProps) {
+export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, onDelete, onCompare, onGeometryOperations }: DrawnElementsListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const polygonCount = elements.filter((element) => isSurfaceGeometryType(element.geometryType)).length;
@@ -41,6 +42,16 @@ export function DrawnElementsList({ elements, selectedIds, onFocus, onRename, on
           <span className="drawn-elements-count" aria-label={`${elements.length} elementos`}>{elements.length}</span>
         </div>
       </div>
+      {polygonCount >= 2 && (
+        <button
+          type="button"
+          className="drawn-elements-operations"
+          aria-label="Operaciones geométricas entre áreas"
+          onClick={onGeometryOperations}
+        >
+          <GitCompareArrows size={14} aria-hidden="true" /> Operaciones geométricas
+        </button>
+      )}
       {elements.length === 0 ? (
         <p className="drawn-elements-empty">Dibuja un punto, una línea o un área para empezar.</p>
       ) : (
